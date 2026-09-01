@@ -1,0 +1,41 @@
+# ── Bytecode / cachés de Python ─────────────────────────────────────────
+# Se regeneran solos al importar; versionarlos provoca conflictos de merge
+# y bloquea operaciones de git (stash/pop, checkout) al correr los tests.
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ── Entornos virtuales ─────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── Herramientas / cachés de test y análisis ──────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# ── IDEs / editores ───────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Sistema operativo ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Artefactos de este proyecto ──────────────────────────────────────
+# Logs de corridas de PRUEBA (throwaway). Los resultados crudos del
+# protocolo experimental definitivo deberían guardarse en otra carpeta
+# (p. ej. resultados/) y SÍ versionarse por reproducibilidad.
+logs/smoke_*.json
+logs/_run_*.txt
+
+# Archivo basura de una redirección de shell fallida (pip ... 'tqdm>=4.65')
+/4.65

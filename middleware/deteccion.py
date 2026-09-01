@@ -70,7 +70,9 @@ PESO_DWD = 0.7
 PESO_HDF = 0.0            # inactivo: dominio continuo (CEC 2022)
 
 UMBRAL_ESTANCAMIENTO = 0.2          # S < 0.2 => estado de alto estancamiento
-FRACCION_ACTIVACION = 0.15          # Score se computa solo tras 15% de iteraciones
+FRACCION_ACTIVACION = 0.15          # Score se computa solo tras el 15% del
+                                    # presupuesto total (MaxFES, o nº de
+                                    # iteraciones en la vía clásica)
 
 
 @dataclass
@@ -243,22 +245,37 @@ def calcular_score(
     poblacion_actual: np.ndarray,
     limites: np.ndarray,
     iteracion_actual: int,
-    max_iteraciones: int,
+    max_iteraciones: int = None,
     ventana: int = VENTANA_FIR,
     peso_fir: float = PESO_FIR,
     peso_dwd: float = PESO_DWD,
     peso_hdf: float = PESO_HDF,
+    fes_actual: float = None,
+    max_fes: float = None,
 ) -> ResultadoDeteccion:
     """
     Calcula el Score compuesto S según la ecuación (4), integrando FIR,
     DWD (normalizado) y HDF (inactivo). Aplica la regla de activación:
-    el Score solo se computa de forma "activa" tras el 15% de las
-    iteraciones totales (estabilidad estocástica inicial, según el
-    documento). Antes de eso, se retorna igualmente el cálculo pero
-    marcado como `activo=False`, para que el middleware pueda decidir
-    explícitamente ignorarlo en ese período.
+    el Score solo se computa de forma "activa" tras el 15% del presupuesto
+    total (estabilidad estocástica inicial, según el documento). Antes de
+    eso, se retorna igualmente el cálculo pero marcado como `activo=False`,
+    para que el middleware pueda decidir explícitamente ignorarlo en ese
+    período.
+
+    El 15% se mide contra el presupuesto que gobierna la corrida:
+      - Vía MaxFES (recomendada, exigida por el setup experimental): si se
+        entregan `fes_actual` y `max_fes`, la activación ocurre cuando se
+        han consumido FRACCION_ACTIVACION * max_fes evaluaciones agregadas.
+      - Vía clásica: si no, se usa iteracion_actual / max_iteraciones.
+
+    La ventana de FIR (VENTANA_FIR) NO cambia entre vías: sigue expresada en
+    generaciones del algoritmo objetivo, que es su semántica natural (mide
+    si el mejor fitness de ESE algoritmo mejoró en sus últimas w generaciones).
     """
-    activo = iteracion_actual >= FRACCION_ACTIVACION * max_iteraciones
+    if fes_actual is not None and max_fes is not None:
+        activo = fes_actual >= FRACCION_ACTIVACION * max_fes
+    else:
+        activo = iteracion_actual >= FRACCION_ACTIVACION * max_iteraciones
 
     # FIR requiere comparar contra `ventana` iteraciones atrás. Si el
     # historial todavía no tiene suficiente profundidad, no hay mejora

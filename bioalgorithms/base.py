@@ -55,22 +55,54 @@ class AlgoritmoBioinspirado(ABC):
     """
 
     def __init__(self, funcion_objetivo, n_individuos: int, n_dimensiones: int,
-                 limites: np.ndarray, max_iteraciones: int, semilla: int = None):
+                 limites: np.ndarray, max_iteraciones: int = None,
+                 semilla: int = None, *, max_fes: int = None,
+                 fraccion_presupuesto: float = 0.5):
         """
         funcion_objetivo: callable que recibe un vector x (n_dimensiones,) y
                            retorna un escalar (fitness). Para este proyecto
                            proviene de opfunu (benchmark CEC 2022).
         limites: array (n_dimensiones, 2) con [min, max] por dimensión.
+        max_iteraciones: tope por número de generaciones (vía "clásica"). Es
+                 OPCIONAL: si se especifica `max_fes`, el criterio de parada
+                 pasa a ser el presupuesto de evaluaciones y `max_iteraciones`
+                 solo actúa como tope de seguridad si se entrega.
         semilla: semilla aleatoria para reproducibilidad (obligatoria en el
-                 protocolo experimental CEC 2022, donde cada corrida debe ser
+                 protocolo experimental, donde cada corrida debe ser
                  reproducible).
+        max_fes: presupuesto TOTAL de evaluaciones de la función objetivo del
+                 EXPERIMENTO COMPLETO (los dos algoritmos en paralelo comparten
+                 este presupuesto). Cuando se entrega, los esquemas de control
+                 dependientes del presupuesto (p. ej. la inercia decreciente de
+                 PSO) se calculan contra él en vez de contra `max_iteraciones`.
+        fraccion_presupuesto: fracción de `max_fes` que se ESTIMA consumirá
+                 este algoritmo (el resto lo consume el otro hilo). Por defecto
+                 0.5, asumiendo un reparto ~50/50 entre los dos algoritmos que
+                 corren en paralelo. Se usa para dimensionar el "progreso"
+                 [0, 1] de los esquemas temporales de este algoritmo.
         """
-        self.funcion_objetivo = funcion_objetivo
         self.n_individuos = n_individuos
         self.n_dimensiones = n_dimensiones
         self.limites = limites
         self.max_iteraciones = max_iteraciones
+        self.max_fes = max_fes
+        self.fraccion_presupuesto = fraccion_presupuesto
         self.rng = np.random.default_rng(semilla)
+
+        # Contador de evaluaciones realizadas por ESTE algoritmo. Se envuelve
+        # la función objetivo para incrementarlo de forma transparente: así
+        # cuenta tanto las evaluaciones por lote (_evaluar_poblacion) como las
+        # llamadas individuales que hacen algunos algoritmos (p. ej. DE evalúa
+        # un vector de prueba por individuo). Solo lo escribe el hilo de este
+        # algoritmo, por lo que no necesita lock.
+        self._funcion_objetivo_usuario = funcion_objetivo
+        self.fes_propias = 0
+
+        def _funcion_objetivo_contada(x):
+            self.fes_propias += 1
+            return self._funcion_objetivo_usuario(x)
+
+        self.funcion_objetivo = _funcion_objetivo_contada
 
         self.iteracion_actual = 0
         self.historial: list[EstadoIteracion] = []

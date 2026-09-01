@@ -19,20 +19,22 @@ El sistema detecta estancamiento mediante un Score compuesto, extrae conocimient
 ```
 Fase 3/
 ├── bioalgorithms/
-│   ├── base.py              # Clase abstracta AlgoritmoBioinspirado + EstadoIteracion
-│   ├── pso.py               # PSO con inercia decreciente (self.w_actual persistente)
+│   ├── base.py              # AlgoritmoBioinspirado + EstadoIteracion; contador fes_propias;
+│   │                        #   parámetros max_fes / fraccion_presupuesto
+│   ├── pso.py               # PSO; inercia decrece contra la cuota MaxFES·0.5 (o iteraciones)
 │   └── de.py                # DE/rand/1/bin (F=0.2, CR=0.3 por defecto)
 │
 ├── problems/
-│   └── cec2022_wrapper.py   # Wrapper opfunu: 12 funciones CEC 2022, D∈{10,20}
+│   └── cec2022_wrapper.py   # Wrapper opfunu: 12 funciones CEC 2022, D∈{10,20};
+│                            #   contador FES agregado (.fes) + óptimo conocido + error()
 │
 ├── middleware/
-│   ├── deteccion.py         # Fase 1: Score S = 0.3·FIR + 0.7·DWD, roles dinámicos
+│   ├── deteccion.py         # Fase 1: Score S = 0.3·FIR + 0.7·DWD; warm-up 15% por MaxFES
 │   ├── extraccion.py        # Fase 2: XGBoost + FastSHAP + selección élite + umbral MMD
 │   ├── xgboost_wrapper.py   # Wrapper XGBoost como nn.Module (para MarginalImputer)
 │   ├── barrera_seguridad.py # Wasserstein (scipy.linprog) + MMD centrado
 │   ├── transferencia.py     # Canal A (RMP) + Canal B (inyección élite)
-│   └── orquestador.py       # Threading Solución A: 3 hilos, pausa entre iteraciones
+│   └── orquestador.py       # Threading Solución A: 3 hilos; parada por MaxFES o iteraciones
 │
 ├── fastshap_lib/            # Código fuente oficial iancovert/fastshap
 │   ├── fastshap.py          # FastSHAP + parche compatibilidad PyTorch ≥ 2.x
@@ -47,8 +49,10 @@ Fase 3/
 │   ├── test_barrera_seguridad.py
 │   ├── test_fase3_transferencia.py
 │   ├── test_fase3_transferencia_exitosa.py
-│   └── test_orquestador_threading.py   # ← Test principal de integración completa
+│   ├── test_orquestador_threading.py          # integración completa — vía iteraciones (clásica)
+│   └── test_orquestador_threading_maxfes.py   # integración completa — vía MaxFES
 │
+├── .gitignore              # __pycache__/, entornos, cachés de test, logs de prueba
 ├── requirements.txt
 └── README.md
 ```
@@ -60,7 +64,9 @@ Fase 3/
 **Requisitos:** Python 3.14+ (desarrollado en Python 3.14.6)
 
 ```bash
-pip install "setuptools<82" numpy>=1.24 scipy>=1.10 opfunu>=1.0.0 torch>=2.0 xgboost>=2.0 scikit-learn>=1.3 tqdm>=4.65
+pip install -r requirements.txt
+# o, explícito (comillas obligatorias: sin ellas la shell interpreta '>' como redirección):
+pip install "setuptools<82" "numpy>=1.24" "scipy>=1.10" "opfunu>=1.0.0" "torch>=2.0" "xgboost>=2.0" "scikit-learn>=1.3" "tqdm>=4.65"
 ```
 
 > **Nota:** `fastshap` no está disponible en PyPI para Python 3.14. Se incluye como código fuente en `fastshap_lib/` con un parche de compatibilidad para PyTorch ≥ 2.0 ya aplicado. No instalar por pip.
@@ -71,7 +77,9 @@ pip install "setuptools<82" numpy>=1.24 scipy>=1.10 opfunu>=1.0.0 torch>=2.0 xgb
 
 ## Uso Rápido
 
-El punto de entrada principal es el test de integración completa:
+El punto de entrada principal es el test de integración completa. El
+criterio de parada es **MaxFES** (evaluaciones de la función objetivo,
+agregadas sobre los dos algoritmos), tal como exige el setup experimental:
 
 ```python
 from problems.cec2022_wrapper import ProblemaCEC2022
@@ -80,45 +88,81 @@ from bioalgorithms.de import DE
 from middleware.orquestador import Orquestador
 
 problema = ProblemaCEC2022(numero_funcion=11, ndim=20)
-n_iteraciones = 2000
+MAX_FES = 120_000            # presupuesto total A+B (5e3 / 5e4 / 5e5 / 5e6 en el protocolo)
 
-# Caso validado: PSO fuente (bien afinado) → PSO objetivo (mal afinado)
-alg_a = PSO(problema, 30, problema.ndim, problema.limites,
-            n_iteraciones, semilla=42,
-            w_max=0.9, w_min=0.4, c1=2.0, c2=2.0)
+# semilla SIEMPRE como keyword; max_iteraciones se omite en la vía MaxFES
+alg_a = PSO(problema, 30, problema.ndim, problema.limites, semilla=42,
+            w_max=0.9, w_min=0.4, c1=2.0, c2=2.0,
+            max_fes=MAX_FES)            # inercia decrece contra MAX_FES * 0.5 (su cuota)
 
-alg_b = PSO(problema, 30, problema.ndim, problema.limites,
-            n_iteraciones, semilla=500,
-            w_max=0.6, w_min=0.6, c1=0.8, c2=0.8)
+alg_b = DE(problema, 30, problema.ndim, problema.limites, semilla=500,
+           F=0.2, CR=0.3, max_fes=MAX_FES)
 
 orq = Orquestador(
     algoritmo_a=alg_a,
     algoritmo_b=alg_b,
     limites=problema.limites,
-    n_iteraciones=n_iteraciones,
-    frecuencia_monitoreo=10,   # verificar cada 10 iteraciones
+    problema=problema,                  # provee el contador .fes compartido
+    max_fes=MAX_FES,
+    frecuencia_monitoreo_fes=600,       # verificar Fase 1 cada 600 evaluaciones
     directorio_log="logs",
     nombre_log="experimento",
-    max_epochs_fastshap=10,    # reducir a 10 para pruebas rápidas; 50 para producción
+    max_epochs_fastshap=10,             # reducir a 10 para pruebas rápidas; 50 para producción
 )
 
 resumen = orq.ejecutar()
+# resumen.mejor_fitness_sistema  → min(fitness_A, fitness_B) al alcanzar MaxFES
+# resumen.error_sistema          → mejor_fitness_sistema - f(x*); 0 = óptimo alcanzado
+# resumen.fes_consumidas_total   → evaluaciones realmente gastadas (≈ MaxFES ± pop)
 ```
 
+### Error respecto al óptimo (métrica de comparación)
+
+`ProblemaCEC2022` conoce el valor de la función en el óptimo global, `f(x*)`
+(tabla `OPTIMO_GLOBAL_CEC2022`: F1→300, F2→400, …, F11→2600, F12→2700; igual
+para D=10 y D=20). El error de convergencia es `f_obtenido − f(x*)` (≥ 0, y
+`→ 0` cuanto más cerca del óptimo):
+
+```python
+problema.optimo_global            # f(x*), p. ej. 2600.0 para F11
+problema.error(2637.4)            # -> 37.4   (escalar o array de numpy)
+problema.error(vals, aplicar_umbral=True)   # colapsa errores < 1e-8 a 0 (convención CEC)
+```
+
+El `Orquestador` lo calcula automáticamente al terminar (`resumen.error_sistema`,
+`error_algoritmo_a/b`, `optimo_conocido`) siempre que se le pase `problema=`.
+
 El orquestador imprime el log en tiempo real y guarda un archivo JSON en `logs/` al finalizar.
+
+> **Vía clásica (compatibilidad):** pasar `n_iteraciones=` (a los algoritmos como
+> 5.º posicional y al `Orquestador`) en vez de `max_fes` + `problema`. Se
+> conserva para los tests de Fase 0–3; los experimentos usan la vía MaxFES.
+
+### Contabilidad de evaluaciones (FES)
+
+- El contador vive en `ProblemaCEC2022` (`problema.fes`, thread-safe). Como el
+  mismo objeto `problema` se entrega a los dos algoritmos, cuenta el total
+  **agregado** A+B. `problema.reiniciar_fes()` lo pone a cero para corridas
+  independientes.
+- Cada algoritmo lleva además su propio `algoritmo.fes_propias`.
+- El middleware **no consume FES**: Fase 2 entrena sobre historial ya evaluado
+  y Canal B inyecta instancias con su fitness heredado (sin re-evaluar).
+- **Sobrepaso:** un hilo no arranca una generación que no cabe en el
+  presupuesto (`fes + n_individuos > MaxFES`); el sobrepaso máximo es ~`pop_size`
+  por hilo (convención CEC).
 
 ---
 
 ## Arquitectura — Ciclo de Transferencia
 
 ```
-Hilo A (fuente) ──┐
+Hilo A (fuente) ──┐        Parada: MaxFES = evaluaciones agregadas A+B (contador en el problema)
                   ├──► Orquestador (middleware)
 Hilo B (objetivo) ──┘
                          │
                     ① Fase 1 — Detección
                          │  S = 0.3·FIR + 0.7·DWD
-                         │  S < 0.2 ∧ fuente_óptimo → activar ciclo
+                         │  activo tras 15% de MaxFES; S < 0.2 ∧ fuente_óptimo → activar ciclo
                          │
                     ② Fase 2 — Extracción (algoritmos PAUSADOS)
                          │  XGBoost → R² (bloquear si R² < 0)
@@ -134,7 +178,7 @@ Hilo B (objetivo) ──┘
                          │
                          ├─ Canal A — RMP paramétrico
                          │  RMP: 0.05→0.6, incremento 0.5·ΔS
-                         │  Algoritmos REANUDADOS por ventana 10% iteraciones reales
+                         │  Algoritmos REANUDADOS por ventana = 10% de MaxFES (evaluaciones)
                          │  Si payload vacío (PSO↔DE sin claves comunes) → Canal B directo
                          │  Evaluar ΔS > 0.02 → éxito / fracaso
                          │
@@ -142,7 +186,7 @@ Hilo B (objetivo) ──┘
                             Filtro MMD (umbral precalculado en Fase 2)
                             Sustituye peores individuos del objetivo
                             Evaluación inmediata, sin iterar
-                            → CERRAR CICLO + cooldown 10% iteraciones
+                            → CERRAR CICLO + cooldown = 10% de MaxFES
 ```
 
 ---
@@ -151,20 +195,23 @@ Hilo B (objetivo) ──┘
 
 | Componente | Decisión | Estado |
 |---|---|---|
-| FIR | `1 - exp(-3·max(0, f_{t-20} - f_t) / (\|f_{t-20}\| + ε))` | Definitiva |
+| Criterio de parada | MaxFES agregado A+B (contador en `ProblemaCEC2022`); sobrepaso ≤ pop_size | Definitiva |
+| Métrica de comparación | error = `f_obtenido − f(x*)`; `f(x*)` de tabla `OPTIMO_GLOBAL_CEC2022` validada contra opfunu | Definitiva |
+| Progreso inercia PSO | contra su cuota estimada `MaxFES · 0.5` (reparto ~50/50 entre hilos) | Provisional |
+| FIR | `1 - exp(-3·max(0, f_{t-20} - f_t) / (\|f_{t-20}\| + ε))` — ventana en generaciones del objetivo | Definitiva |
 | Pesos Score | W_FIR=0.3, W_DWD=0.7, W_HDF=0.0 | Provisional |
-| Umbral estancamiento | S < 0.2 tras 15% de iteraciones | Definitiva |
-| Ventana historial Fase 2 | Últimas 50 iteraciones | Definitiva |
+| Umbral estancamiento | S < 0.2 tras 15% de **MaxFES** consumido | Definitiva |
+| Ventana historial Fase 2 | Últimas 50 generaciones de la fuente | Definitiva |
 | Criterio élite | Percentil 20% fitness + ranking Shapley | Definitiva |
 | RMP inicial / tope | 0.05 / 0.6 | Definitiva |
-| Ventana Canal A | 10% del total de iteraciones reales | Definitiva |
+| Ventana Canal A | 10% de MaxFES (evaluaciones agregadas A+B) | Definitiva |
 | θ_W (Wasserstein) | 25% del diámetro máximo del espacio | Definitiva |
 | Gamma MMD | Solo distancias intra-grupo | Definitiva |
 | Centrado MMD | Centrar poblaciones en su media antes del kernel RBF | Definitiva |
 | Umbral MMD | 3×P95 ruido muestreo fuente; precalculado en Fase 2 | Definitiva |
 | Bloqueo R² | Estrictamente negativo (R² < 0) | Definitiva |
 | Canal A inerte | Escalar a Canal B directo si payload vacío | Definitiva |
-| Cooldown post-ciclo | 10% del total (igual que ventana Canal A) | Definitiva |
+| Cooldown post-ciclo | 10% de MaxFES (igual que ventana Canal A) | Definitiva |
 | Paralelismo | Threading Solución A (pseudo-paralelo, GIL) | Definitiva |
 | Pausa threading | Bucle activo `while evento.is_set(): sleep(0.005)` | Definitiva |
 | FIR post-transferencia | Historial recortado desde última transferencia | Definitiva |
@@ -186,7 +233,7 @@ Hilo B (objetivo) ──┘
 
 6. **Canal A inerte (PSO↔DE)**: PSO {w,c1,c2} y DE {F,CR} no tienen claves en común → payload vacío → el orquestador escala directamente a Canal B sin esperar la ventana de evaluación.
 
-7. **Ciclos en ráfaga post-Canal B**: Score sigue bajo inmediatamente tras el cierre, re-detecta estancamiento. Solución: cooldown de 10% del total de iteraciones.
+7. **Ciclos en ráfaga post-Canal B**: Score sigue bajo inmediatamente tras el cierre, re-detecta estancamiento. Solución: cooldown de 10% del presupuesto total (MaxFES).
 
 8. **R²=0 bloqueaba transferencias válidas**: varianza de fitness ≈ 0 producía R²=0.0 exacto por la guarda `ss_tot > 0`. Solución: bloquear solo si R² < 0 estrictamente.
 
@@ -214,11 +261,17 @@ Hilo B (objetivo) ──┘
 - Fase 2: XGBoost + FastSHAP + selección élite + parámetros de escape + umbral MMD precalculado
 - Fase 3: Wasserstein + Canal A (RMP) + Canal B (MMD + inyección)
 - Orquestador: threading Solución A con pausa real, log dual (consola + JSON)
-- Tests unitarios para cada fase (Fases 0–3)
+- **Criterio de parada MaxFES**: contador agregado A+B en `ProblemaCEC2022`;
+  warm-up del 15%, ventana Canal A, cooldown y decaimiento de inercia PSO
+  expresados contra el presupuesto de evaluaciones. Vía clásica por
+  iteraciones conservada para compatibilidad.
+- Tests unitarios para cada fase (Fases 0–3) + `test_orquestador_threading_maxfes.py`
 
 ### Pendiente ⏳
 - **Fase 4 / Fase Experimental**: sustituye la comprobación formal. Debe redactarse como apartado separado fuera del código. Incluiría: ΔScore estructurado, auditoría SHAP de asimilación, retorno formal al ciclo de monitoreo pasivo.
-- **Protocolo experimental CEC 2022**: 30 corridas × 12 funciones × D∈{10,20}, análisis estadístico (Wilcoxon, A12 Vargha-Delaney).
+- **Protocolo experimental**: harness de corridas (51 semillas × funciones × 2 dimensionalidades × 4 valores de MaxFES: 5e3 / 5e4 / 5e5 / 5e6), corridas independientes por valor de MaxFES, análisis estadístico (Friedman + Shaffer, Wilcoxon). El núcleo MaxFES ya está; falta el grid y el análisis.
+- **Ampliación de benchmarks**: el wrapper actual solo cubre CEC 2022 con D∈{10,20}; el setup pide además CEC 2014/2017 y D=50 (conjuntos CEC_72_10 / CEC_72_50).
+- **Comportamiento con MaxFES bajo (5e3)**: con presupuesto tan chico el middleware puede no llegar a activarse (necesita >50 generaciones de la fuente antes de la primera extracción). Es un hallazgo esperado para la discusión, no un bug.
 - **Calibración de pesos del Score**: W_FIR y W_DWD son provisionales (empíricos).
 - **Ablation Study**: descartado por tiempo, queda como trabajo futuro.
 
@@ -227,16 +280,24 @@ Hilo B (objetivo) ──┘
 ## Log de Ejecución — Formato de Referencia
 
 ```
-[HH:MM:SS.mmm] ℹ  Iniciando ejecución (2000 iter | ventana Canal A: 200 | cooldown: 200)
+[HH:MM:SS.mmm] ℹ  Iniciando ejecución paralela (MaxFES=120000 evaluaciones agregadas A+B | monitoreo cada 600 FES | ventana Canal A: 12000 FES (10% de MaxFES) | cooldown post-ciclo: 12000 FES)
 [HH:MM:SS.mmm] ①  it= 381 | fuente=A(PSO) fit=2891.17 S=0.1673 | objetivo=B(PSO) fit=4484.47 S=0.0000 estancado=True
-[HH:MM:SS.mmm] ②  it= 381 | Nuevo ciclo. Activando Fase 2...
+[HH:MM:SS.mmm] ②  it= 381 | Nuevo ciclo detectado. Activando Fase 2 (extracción)...
 [HH:MM:SS.mmm] ②  it= 381 | Fase 2 OK (6.5s) | R²=0.7902 | élite: ['3186.2', ...]
-[HH:MM:SS.mmm] ③  it= 381 | Canal A: RMP=0.050 aplicado. Hiperparámetros → {'w': 0.611, 'c1': 0.86, 'c2': 0.86}
-[HH:MM:SS.mmm] ③  it= 382 | Canal A: inicio real registrado (ventana finaliza en it≈582)
-[HH:MM:SS.mmm] ③  it= 582 | Canal A: ventana completada. Pausando para evaluar ΔScore...
-[HH:MM:SS.mmm] ⚠  it= 582 | Canal A insuficiente (ΔS=-0.0000). Escalando a Canal B...
-[HH:MM:SS.mmm] ③  it= 582 | Canal B: MMD ok=5 rechaz=0. Evaluación inmediata.
-[HH:MM:SS.mmm] ✅  it= 582 | Ciclo cerrado tras Canal B. Cooldown hasta it=782.
+[HH:MM:SS.mmm] ③  it= 381 | Canal A: RMP=0.050 aplicado. Hiperparámetros objetivo → {'w': 0.611, 'c1': 0.86, 'c2': 0.86}
+[HH:MM:SS.mmm] ③  it= 382 | Canal A: inicio real registrado (ventana finaliza en ≈34800 FES).
+[HH:MM:SS.mmm] ③  it= 540 | Canal A: ventana de 12000 FES completada (22800 → 34800 FES). Pausando para evaluar ΔScore...
+[HH:MM:SS.mmm] ⚠  it= 540 | Canal A insuficiente (ΔS=-0.0000). Escalando a Canal B...
+[HH:MM:SS.mmm] ③  it= 540 | Canal B: MMD ok=5 rechaz=0. Evaluación inmediata (sin iterar).
+[HH:MM:SS.mmm] ✅  it= 540 | Ciclo cerrado tras Canal B. Cooldown activo hasta 46800 FES (12000 FES).
+...
+[HH:MM:SS.mmm] ℹ  RESUMEN FINAL
+[HH:MM:SS.mmm] ℹ    MaxFES (presupuesto):         120000
+[HH:MM:SS.mmm] ℹ    FES consumidas (total A+B):   120000
+[HH:MM:SS.mmm] ℹ    FES consumidas A / B:         88200 / 31800
+[HH:MM:SS.mmm] ℹ    Mejor fitness del sistema:    2623.3425
+[HH:MM:SS.mmm] ℹ    Óptimo conocido f(x*):        2600.0000
+[HH:MM:SS.mmm] ℹ    Error del sistema (→0 ideal): 2.3342e+01
 ```
 
 ---
@@ -244,16 +305,19 @@ Hilo B (objetivo) ──┘
 ## Dependencias
 
 ```
+setuptools<82        # restaura pkg_resources para opfunu (ver nota abajo)
 numpy>=1.24
 scipy>=1.10
-opfunu>=1.0.0
+opfunu>=1.0.4
 torch>=2.0
 xgboost>=2.0
 scikit-learn>=1.3
 tqdm>=4.65
-setuptools<82
 # fastshap: incluido como código fuente en fastshap_lib/ (no instalar por pip)
+# POT: descartado (incompatible con Python 3.14 en Windows) → Wasserstein vía scipy.linprog
 ```
+
+(Ver `requirements.txt`.)
 
 > **Python 3.14 — `pkg_resources` removido**: `opfunu` depende de `pkg_resources`, que fue eliminado de la biblioteca estándar en Python 3.14. La instalación de `setuptools<82` lo restaura. Sin esto, la importación de `opfunu` falla con `ModuleNotFoundError: No module named 'pkg_resources'`.
 
@@ -263,9 +327,11 @@ setuptools<82
 
 | Archivo | Qué hace | Dónde continuar |
 |---|---|---|
-| `middleware/orquestador.py` | Ciclo completo, threading, log | Implementar Fase Experimental |
-| `middleware/deteccion.py` | Score S, roles, FIR | Calibrar pesos W_FIR / W_DWD |
-| `middleware/extraccion.py` | XGBoost + FastSHAP | Ajustar ventana historial (actual: 50 iter) |
+| `problems/cec2022_wrapper.py` | Funciones CEC 2022 + **contador FES agregado** (`.fes`) | Añadir CEC 2014/2017 y D=50 |
+| `middleware/orquestador.py` | Ciclo completo, threading, log, vía MaxFES / clásica | Implementar Fase Experimental |
+| `middleware/deteccion.py` | Score S, roles, FIR; warm-up 15% por MaxFES | Calibrar pesos W_FIR / W_DWD |
+| `middleware/extraccion.py` | XGBoost + FastSHAP | Ajustar ventana historial (actual: 50 gen) |
 | `middleware/transferencia.py` | Canal A y B, RMP, EstadoTransferencia | Ajustar RMP inicial si se desea |
 | `middleware/barrera_seguridad.py` | Wasserstein, MMD, umbral | Sin cambios pendientes |
-| `tests/test_orquestador_threading.py` | Test principal de integración | Base para protocolo experimental |
+| `tests/test_orquestador_threading_maxfes.py` | Test de integración vía MaxFES | Base para el harness de 51 corridas |
+| `tests/test_orquestador_threading.py` | Test de integración vía iteraciones (clásica) | — |

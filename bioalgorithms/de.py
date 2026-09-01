@@ -21,9 +21,12 @@ from bioalgorithms.base import AlgoritmoBioinspirado
 class DE(AlgoritmoBioinspirado):
 
     def __init__(self, funcion_objetivo, n_individuos, n_dimensiones, limites,
-                 max_iteraciones, semilla=None, F=0.5, CR=0.7):
+                 max_iteraciones=None, semilla=None, F=0.5, CR=0.7,
+                 *, max_fes=None, fraccion_presupuesto=0.5):
         super().__init__(funcion_objetivo, n_individuos, n_dimensiones,
-                          limites, max_iteraciones, semilla)
+                          limites, max_iteraciones, semilla,
+                          max_fes=max_fes,
+                          fraccion_presupuesto=fraccion_presupuesto)
         self.F = F     # factor de escala de la mutación diferencial
         self.CR = CR   # probabilidad de cruce (recombinación binomial)
 

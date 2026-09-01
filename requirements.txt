@@ -1,0 +1,13 @@
+# Dependencias del middleware. Python 3.14+.
+# fastshap NO va aquí: se incluye como código fuente en fastshap_lib/.
+# POT (Python Optimal Transport) fue descartado por incompatibilidad con
+# Python 3.14 en Windows; Wasserstein se calcula con scipy.optimize.linprog.
+
+setuptools<82        # restaura pkg_resources, removido de la stdlib en Python 3.14 (lo necesita opfunu)
+numpy>=1.24
+scipy>=1.10
+opfunu>=1.0.4
+torch>=2.0
+xgboost>=2.0
+scikit-learn>=1.3
+tqdm>=4.65

@@ -92,15 +92,17 @@ RMP_INICIAL = 0.05
 RMP_TOPE = 0.6                  # tope conservador deliberado (ver docstring)
 FACTOR_INCREMENTO_RMP = 0.5      # incremento = factor * ΔScore (ver docstring)
 FRACCION_VENTANA_CANAL_A = 0.10  # la ventana de evaluación del Canal A es el
-                                  # 10% del total de iteraciones del experimento.
+                                  # 10% del presupuesto total del experimento.
                                   # DECISIÓN ACORDADA: se pasó de un valor fijo
                                   # (30 iteraciones absolutas) a un porcentaje
                                   # del total, porque 30 iteraciones fijas sobre
                                   # 2000 representan solo el 1.5% — demasiado
                                   # poco para que el RMP tenga efecto real antes
                                   # de que el middleware evalúe si Canal A funcionó.
-                                  # Con 10%, la ventana escala con el experimento:
-                                  # 200 iter en 2000, 30 iter en 300, etc.
+                                  # Con 10%, la ventana escala con el experimento.
+                                  # Vía MaxFES: el orquestador expresa esta ventana
+                                  # en EVALUACIONES agregadas (10% de MaxFES). Vía
+                                  # clásica: en iteraciones (10% de n_iteraciones).
 UMBRAL_DELTA_SCORE_SIGNIFICATIVO = 0.02
 
 
@@ -223,13 +225,15 @@ def ejecutar_ciclo_transferencia(
     o escalar a Canal B, según el protocolo jerárquico de la sección
     4.2.3 del documento.
 
-    ventana_canal_a: número de ITERACIONES REALES de los algoritmos que
-        deben transcurrir desde el inicio del Canal A antes de evaluar
-        si tuvo éxito (ΔS > UMBRAL_DELTA_SCORE_SIGNIFICATIVO) o escalar
-        a Canal B. Se recibe como parámetro (en vez de constante fija)
-        porque se calcula como fracción del total de iteraciones del
-        experimento (FRACCION_VENTANA_CANAL_A × n_iteraciones_total),
-        de modo que la ventana escala con el tamaño del experimento.
+    ventana_canal_a: tamaño de la ventana de espera desde el inicio del
+        Canal A antes de evaluar si tuvo éxito (ΔS >
+        UMBRAL_DELTA_SCORE_SIGNIFICATIVO) o escalar a Canal B. Se recibe
+        como parámetro (en vez de constante fija) porque se calcula como
+        fracción del presupuesto total (FRACCION_VENTANA_CANAL_A × total).
+        La unidad la fija el llamador: el orquestador la expresa en
+        EVALUACIONES agregadas cuando corre por MaxFES, o en iteraciones en
+        la vía clásica. En ambos casos `iteracion_actual` debe llegar en la
+        misma unidad para que la resta tenga sentido.
     """
     # --- Barrera dura: Wasserstein sobre las poblaciones completas ---
     resultado_wasserstein = evaluar_barrera_wasserstein(

@@ -105,7 +105,21 @@ class EntradaLogFase3:
 
 @dataclass
 class ResumenEjecucion:
-    n_iteraciones_totales: int = 0
+    n_iteraciones_totales: int = 0     # generaciones alcanzadas (max de los dos
+                                        # algoritmos); con la vía MaxFES no es un
+                                        # tope prefijado sino lo que se alcanzó
+    max_fes: int = 0                    # presupuesto de evaluaciones del experimento
+    fes_consumidas_total: int = 0       # evaluaciones agregadas realmente gastadas
+    fes_consumidas_a: int = 0
+    fes_consumidas_b: int = 0
+    mejor_fitness_sistema: float = float("inf")  # min(fitness_A, fitness_B): la
+                                                  # métrica que el sistema reporta
+                                                  # al alcanzar MaxFES
+    optimo_conocido: float = float("nan")   # f(x*) de la función (0 si ya se restó)
+    error_algoritmo_a: float = float("nan")  # fitness_A - optimo_conocido
+    error_algoritmo_b: float = float("nan")
+    error_sistema: float = float("nan")      # mejor_fitness_sistema - optimo_conocido:
+                                              # cuánto se acercó el sistema al óptimo
     n_activaciones_fase2: int = 0
     n_reentrenamientos_por_cambio_fuente: int = 0  # veces que FastSHAP
                                                      # se re-entrenó porque
@@ -137,18 +151,45 @@ class HiloAlgoritmo(threading.Thread):
     def __init__(self, algoritmo, nombre: str,
                  evento_pausa: threading.Event,
                  evento_pausado: threading.Event,
-                 n_iteraciones: int):
+                 parada_global: threading.Event,
+                 n_iteraciones: int = None,
+                 problema=None, max_fes: int = None):
         super().__init__(daemon=True)
         self.algoritmo = algoritmo
         self.nombre = nombre
         self.evento_pausa = evento_pausa
         self.evento_pausado = evento_pausado
-        self.n_iteraciones = n_iteraciones
+        self.parada_global = parada_global
+        self.n_iteraciones = n_iteraciones      # tope de seguridad (opcional)
+        self.problema = problema                 # provee .fes (contador agregado)
+        self.max_fes = max_fes
         self.terminado = False
         self._lock_historial = threading.Lock()
 
+    def _presupuesto_agotado(self) -> bool:
+        """
+        True si arrancar otra generación se pasaría del presupuesto MaxFES.
+        Se comprueba ANTES de cada generación: si la generación completa
+        (n_individuos evaluaciones) no cabe en lo que queda de presupuesto,
+        no se arranca. El sobrepaso máximo posible es de ~n_individuos por
+        hilo si ambos hilos superan el guard en la misma ventana de tiempo
+        (convención CEC: tolerado).
+        """
+        if self.problema is None or self.max_fes is None:
+            return False
+        return self.problema.fes + self.algoritmo.n_individuos > self.max_fes
+
     def run(self):
-        for _ in range(self.n_iteraciones):
+        iteraciones_hechas = 0
+        while not self.parada_global.is_set():
+            # Criterio de parada por presupuesto (vía MaxFES).
+            if self._presupuesto_agotado():
+                self.parada_global.set()
+                break
+            # Tope de seguridad por iteraciones (vía clásica, u opcional).
+            if self.n_iteraciones is not None and iteraciones_hechas >= self.n_iteraciones:
+                break
+
             # Verificar si el middleware solicitó una pausa.
             # Se verifica ENTRE iteraciones completas para no interrumpir
             # ningún paso de cálculo interno del algoritmo.
@@ -161,15 +202,19 @@ class HiloAlgoritmo(threading.Thread):
                 # SET — y ya lo está. Se necesita un evento de "permiso para
                 # reanudar" separado, implementado aquí como espera activa
                 # con sleep corto para no consumir CPU innecesariamente.
-                while self.evento_pausa.is_set():
+                while self.evento_pausa.is_set() and not self.parada_global.is_set():
                     time.sleep(0.005)
 
                 self.evento_pausado.clear()  # confirmar que reanudé
+
+                if self.parada_global.is_set():
+                    break
 
             # Ejecutar una iteración (operación atómica desde el punto de
             # vista del middleware: no se interrumpe a mitad)
             with self._lock_historial:
                 self.algoritmo.ejecutar_iteracion()
+            iteraciones_hechas += 1
 
         self.terminado = True
 
@@ -192,61 +237,115 @@ class Orquestador:
     """
 
     def __init__(self, algoritmo_a, algoritmo_b, limites: np.ndarray,
-                 n_iteraciones: int, frecuencia_monitoreo: int = 5,
+                 n_iteraciones: int = None, frecuencia_monitoreo: int = 5,
                  directorio_log: str = ".", nombre_log: str = "middleware_log",
                  max_epochs_fastshap: int = 50,
-                 cooldown_post_ciclo: int = None):
+                 cooldown_post_ciclo: int = None,
+                 *, problema=None, max_fes: int = None,
+                 frecuencia_monitoreo_fes: int = None,
+                 cooldown_fes: int = None):
         """
         algoritmo_a, algoritmo_b: instancias de AlgoritmoBioinspirado.
-        frecuencia_monitoreo: cada cuántas iteraciones el hilo del
-            middleware verifica el Score de Fase 1.
+
+        Hay dos criterios de parada, mutuamente excluyentes:
+
+          VÍA MaxFES (recomendada, exigida por el setup experimental de la
+          tesis): pasar `problema` (una ProblemaCEC2022 con contador `.fes`
+          compartido por ambos algoritmos) y `max_fes`. El sistema corre
+          hasta que las evaluaciones AGREGADAS de PSO+DE alcanzan `max_fes`.
+          Todas las magnitudes "fracción del presupuesto" (warm-up del 15%,
+          ventana de Canal A, cooldown) se miden en evaluaciones agregadas.
+
+          VÍA CLÁSICA (compatibilidad): pasar `n_iteraciones`. Cada algoritmo
+          corre ese número de generaciones y las fracciones se miden en
+          iteraciones, como antes.
+
+        frecuencia_monitoreo / frecuencia_monitoreo_fes: cada cuántas
+            iteraciones (vía clásica) o evaluaciones agregadas (vía MaxFES)
+            el hilo del middleware verifica el Score de Fase 1. Si
+            `frecuencia_monitoreo_fes` es None en la vía MaxFES, se usa
+            max(pop_a + pop_b, max_fes // 500).
         max_epochs_fastshap: épocas de entrenamiento del explainer
             FastSHAP. Reducir para tests rápidos (ej. 10).
-        cooldown_post_ciclo: iteraciones mínimas de espera tras cerrar
-            un ciclo antes de poder abrir uno nuevo. Evita que el sistema
-            re-detecte estancamiento inmediatamente después de una
-            intervención y abra ciclos en ráfaga. Si None, se calcula
-            automáticamente como ventana_canal_a (10% del total),
-            igualando el período de prueba de hiperparámetros del Canal A
-            con el período de espera post-intervención — ambos usan la
-            misma escala temporal para mantener consistencia.
+        cooldown_post_ciclo / cooldown_fes: espera mínima tras cerrar un
+            ciclo antes de poder abrir uno nuevo, en la unidad de la vía
+            correspondiente. Evita que el sistema re-detecte estancamiento
+            inmediatamente después de una intervención y abra ciclos en
+            ráfaga. Si None, se iguala a la ventana de Canal A (10% del
+            presupuesto).
         """
         self.algoritmo_a = algoritmo_a
         self.algoritmo_b = algoritmo_b
         self.limites = limites
-        self.n_iteraciones = n_iteraciones
-        self.frecuencia_monitoreo = frecuencia_monitoreo
         self.directorio_log = directorio_log
         self.nombre_log = nombre_log
         self.max_epochs_fastshap = max_epochs_fastshap
+
+        # ── Selección de la vía de parada ────────────────────────────────
+        self._modo_fes = max_fes is not None
+        if self._modo_fes:
+            if problema is None:
+                raise ValueError(
+                    "La vía MaxFES requiere pasar `problema` (con contador .fes "
+                    "compartido por ambos algoritmos)."
+                )
+        elif n_iteraciones is None:
+            raise ValueError(
+                "Debe indicarse `n_iteraciones` (vía clásica) o `max_fes` + "
+                "`problema` (vía MaxFES)."
+            )
+
+        self.problema = problema
+        self.max_fes = max_fes
+        self.n_iteraciones = n_iteraciones
+
+        pop_total = algoritmo_a.n_individuos + algoritmo_b.n_individuos
+        # Presupuesto total en la unidad de la vía activa (evaluaciones
+        # agregadas, o iteraciones).
+        self._presupuesto_total = max_fes if self._modo_fes else n_iteraciones
+        # Cota mínima para la ventana de Canal A: 10 generaciones-equivalente
+        # (igual criterio que la versión previa, que usaba `max(10, ...)` en
+        # iteraciones).
+        cota_min_ventana = (10 * pop_total) if self._modo_fes else 10
 
         # Eventos de sincronización
         self._evento_pausa = threading.Event()       # SET = pausar algoritmos
         self._pausado_a = threading.Event()          # SET = A confirmó pausa
         self._pausado_b = threading.Event()          # SET = B confirmó pausa
+        self._parada_global = threading.Event()      # SET = presupuesto agotado
 
         self.resumen = ResumenEjecucion()
         self._estado_transferencia = EstadoTransferencia()
 
-        # Ventana de evaluación del Canal A: 10% del total de iteraciones.
+        # Cadencia de monitoreo pasivo, en la unidad de la vía activa.
+        if self._modo_fes:
+            self.frecuencia_monitoreo = (
+                frecuencia_monitoreo_fes if frecuencia_monitoreo_fes is not None
+                else max(pop_total, max_fes // 500)
+            )
+        else:
+            self.frecuencia_monitoreo = frecuencia_monitoreo
+
+        # Ventana de evaluación del Canal A: 10% del presupuesto total.
         # Se calcula aquí una sola vez para que el valor sea consistente
         # durante toda la ejecución y aparezca claramente en el log.
         self._ventana_canal_a = max(
-            10,
-            int(FRACCION_VENTANA_CANAL_A * n_iteraciones)
+            cota_min_ventana,
+            int(FRACCION_VENTANA_CANAL_A * self._presupuesto_total)
         )
 
-        # Enfriamiento post-ciclo: iteraciones mínimas entre el cierre
-        # de un ciclo y la apertura del siguiente. Evita que el sistema
-        # detecte estancamiento inmediatamente tras Canal B (antes de que
-        # el efecto de la inyección se refleje en el Score) y abra ciclos
-        # en ráfaga re-entrenando FastSHAP innecesariamente.
+        # Enfriamiento post-ciclo: espera mínima entre el cierre de un ciclo
+        # y la apertura del siguiente. Evita que el sistema detecte
+        # estancamiento inmediatamente tras Canal B (antes de que el efecto
+        # de la inyección se refleje en el Score) y abra ciclos en ráfaga
+        # re-entrenando FastSHAP innecesariamente.
+        cooldown_arg = cooldown_fes if self._modo_fes else cooldown_post_ciclo
         self._cooldown_post_ciclo = (
-            cooldown_post_ciclo if cooldown_post_ciclo is not None
+            cooldown_arg if cooldown_arg is not None
             else self._ventana_canal_a  # 10% del total, igual que la ventana de Canal A
         )
-        self._iteracion_fin_cooldown = 0
-        self._iteracion_ultima_transferencia = 0
+        self._fin_cooldown = 0                    # en unidad de la vía activa
+        self._iteracion_ultima_transferencia = 0  # índice de snapshot del objetivo
         self._hilo_a_ref = None  # se asigna en ejecutar()
         self._hilo_b_ref = None
 
@@ -263,6 +362,33 @@ class Orquestador:
                     "FASE3": "③", "OK": "✅", "WARN": "⚠", "ERR": "❌"}
         prefijo = prefijos.get(nivel, "·")
         print(f"[{ts}] {prefijo} {mensaje}")
+
+    # ── Reloj de presupuesto ────────────────────────────────────────────────
+
+    def _reloj(self) -> int:
+        """
+        Posición actual en el presupuesto, en la unidad de la vía activa:
+        evaluaciones agregadas (vía MaxFES) o número de generación
+        (min de los dos algoritmos, vía clásica). Es la magnitud contra la
+        que se miden la cadencia de monitoreo, la ventana de Canal A y el
+        cooldown.
+        """
+        if self._modo_fes:
+            return self.problema.fes
+        return min(len(self.algoritmo_a.historial),
+                   len(self.algoritmo_b.historial))
+
+    def _kwargs_activacion(self) -> dict:
+        """kwargs extra para calcular_score() que fijan el warm-up del 15%
+        en la unidad correcta. En la vía MaxFES se pasa el consumo agregado
+        de evaluaciones; en la vía clásica no se pasa nada y calcular_score
+        usa iteracion_actual / max_iteraciones."""
+        if self._modo_fes:
+            return {"fes_actual": self.problema.fes, "max_fes": self.max_fes}
+        return {}
+
+    def _unidad_reloj(self) -> str:
+        return "FES" if self._modo_fes else "iter"
 
     # ── Pausa / reanudación ──────────────────────────────────────────────────
 
@@ -410,6 +536,7 @@ class Orquestador:
             limites=self.limites,
             iteracion_actual=iteracion_actual,
             max_iteraciones=self.n_iteraciones,
+            **self._kwargs_activacion(),
         )
         fuente_ok = fuente_en_condiciones_optimas(
             alg_fuente.mejor_fitness_historico,
@@ -423,6 +550,7 @@ class Orquestador:
             limites=self.limites,
             iteracion_actual=iteracion_actual,
             max_iteraciones=self.n_iteraciones,
+            **self._kwargs_activacion(),
         )
 
         self.resumen.log_fase1.append(asdict(EntradaLogFase1(
@@ -475,7 +603,7 @@ class Orquestador:
             return False
 
         # Respetar el período de enfriamiento post-ciclo (solo loguear una vez)
-        if iteracion_actual < self._iteracion_fin_cooldown:
+        if self._reloj() < self._fin_cooldown:
             return False
 
         # ── Estado 1 → 2: INICIO DE CICLO con Fase 2 ─────────────────────
@@ -540,9 +668,7 @@ class Orquestador:
                 self._conocimiento_ciclo_actual = None
                 self._rol_fuente_activo = None
                 self._rol_objetivo_activo = None
-                self._iteracion_fin_cooldown = (
-                    iteracion_actual + self._cooldown_post_ciclo
-                )
+                self._fin_cooldown = self._reloj() + self._cooldown_post_ciclo
                 return False
 
         # ── Estado 2: CICLO ACTIVO — aplicar Canal A o Canal B ───────────
@@ -642,6 +768,7 @@ class Orquestador:
             limites=self.limites,
             iteracion_actual=iteracion_actual,
             max_iteraciones=self.n_iteraciones,
+            **self._kwargs_activacion(),
         )
 
         delta_score = (resultado_deteccion.score
@@ -653,17 +780,17 @@ class Orquestador:
                 self._estado_transferencia.rmp_actual + incremento,
                 RMP_INICIAL, RMP_TOPE
             ))
+            self._fin_cooldown = self._reloj() + self._cooldown_post_ciclo
             self._log(
                 f"it={iteracion_actual:4d} | Canal A exitoso: ΔS={delta_score:.4f} "
                 f"RMP→{self._estado_transferencia.rmp_actual:.3f}. "
-                f"Cerrando ciclo, cooldown hasta it={iteracion_actual + self._cooldown_post_ciclo}.",
+                f"Cerrando ciclo, cooldown hasta {self._fin_cooldown} {self._unidad_reloj()}.",
                 nivel="OK",
             )
             self._conocimiento_ciclo_actual = None
             self._rol_fuente_activo = None
             self._rol_objetivo_activo = None
             self._estado_transferencia = EstadoTransferencia()
-            self._iteracion_fin_cooldown = iteracion_actual + self._cooldown_post_ciclo
             self._iteracion_ultima_transferencia = iteracion_actual
         else:
             self._log(
@@ -732,12 +859,12 @@ class Orquestador:
         self._rol_fuente_activo = None
         self._rol_objetivo_activo = None
         self._estado_transferencia = EstadoTransferencia()
-        self._iteracion_fin_cooldown = iteracion_actual + self._cooldown_post_ciclo
+        self._fin_cooldown = self._reloj() + self._cooldown_post_ciclo
         self._iteracion_ultima_transferencia = iteracion_actual
         self._log(
             f"it={iteracion_actual:4d} | Ciclo cerrado tras Canal B. "
-            f"Cooldown activo hasta it={self._iteracion_fin_cooldown} "
-            f"({self._cooldown_post_ciclo} iter).",
+            f"Cooldown activo hasta {self._fin_cooldown} {self._unidad_reloj()} "
+            f"({self._cooldown_post_ciclo} {self._unidad_reloj()}).",
             nivel="OK",
         )
         return "canal_b_aplicado"
@@ -768,22 +895,35 @@ class Orquestador:
         - Canal B: intervención puntual, algoritmos pausados durante
           la inyección y evaluación inmediata (sin iterar adicional).
         """
-        self._log(f"Iniciando ejecución paralela ({self.n_iteraciones} iteraciones, "
-                  f"monitoreo cada {self.frecuencia_monitoreo} iter. | "
-                  f"ventana Canal A: {self._ventana_canal_a} iter "
-                  f"({FRACCION_VENTANA_CANAL_A*100:.0f}% de {self.n_iteraciones}) | "
-                  f"cooldown post-ciclo: {self._cooldown_post_ciclo} iter)")
+        unidad = self._unidad_reloj()
+        if self._modo_fes:
+            self._log(
+                f"Iniciando ejecución paralela (MaxFES={self.max_fes} evaluaciones "
+                f"agregadas A+B | monitoreo cada {self.frecuencia_monitoreo} FES | "
+                f"ventana Canal A: {self._ventana_canal_a} FES "
+                f"({FRACCION_VENTANA_CANAL_A*100:.0f}% de MaxFES) | "
+                f"cooldown post-ciclo: {self._cooldown_post_ciclo} FES)")
+        else:
+            self._log(
+                f"Iniciando ejecución paralela ({self.n_iteraciones} iteraciones | "
+                f"monitoreo cada {self.frecuencia_monitoreo} iter. | "
+                f"ventana Canal A: {self._ventana_canal_a} iter "
+                f"({FRACCION_VENTANA_CANAL_A*100:.0f}% de {self.n_iteraciones}) | "
+                f"cooldown post-ciclo: {self._cooldown_post_ciclo} iter)")
         t_inicio = time.time()
 
+        tope_seguridad = None if self._modo_fes else self.n_iteraciones
         hilo_a = HiloAlgoritmo(
             self.algoritmo_a, "A",
-            self._evento_pausa, self._pausado_a,
-            self.n_iteraciones,
+            self._evento_pausa, self._pausado_a, self._parada_global,
+            n_iteraciones=tope_seguridad,
+            problema=self.problema, max_fes=self.max_fes,
         )
         hilo_b = HiloAlgoritmo(
             self.algoritmo_b, "B",
-            self._evento_pausa, self._pausado_b,
-            self.n_iteraciones,
+            self._evento_pausa, self._pausado_b, self._parada_global,
+            n_iteraciones=tope_seguridad,
+            problema=self.problema, max_fes=self.max_fes,
         )
         # Guardar referencias para que _pausar_algoritmos pueda verificar
         # si cada hilo ya terminó antes de esperar su confirmación de pausa.
@@ -793,8 +933,8 @@ class Orquestador:
         hilo_a.start()
         hilo_b.start()
 
-        iteracion_monitoreada = 0
-        iteracion_inicio_canal_a_real = None  # iteración REAL donde Canal A empezó
+        reloj_monitoreo = 0        # posición del reloj en el último monitoreo pasivo
+        reloj_inicio_canal_a = None  # posición del reloj donde Canal A empezó a correr
         pendiente_registrar_inicio_canal_a = False  # flag: registrar en próxima lectura
         tiempo_en_middleware = 0.0
 
@@ -802,57 +942,56 @@ class Orquestador:
 
             len_a = len(self.algoritmo_a.historial)
             len_b = len(self.algoritmo_b.historial)
-            iteracion_actual = min(len_a, len_b)
+            iteracion_actual = min(len_a, len_b)   # índice de generación / snapshot
+            reloj_actual = self._reloj()           # posición en el presupuesto
 
-            # Capturar la iteración real de inicio de Canal A: se registra
+            # Capturar la posición real de inicio de Canal A: se registra
             # en el primer ciclo del bucle DESPUÉS de haber reanudado los
             # algoritmos, garantizando que medimos desde donde realmente
-            # empezaron a correr con el RMP aplicado — no desde la iteración
-            # donde se aplicó el RMP (que es anterior a la reanudación por
-            # el tiempo que tardó Fase 2).
+            # empezaron a correr con el RMP aplicado — no desde el punto
+            # donde se aplicó el RMP (anterior a la reanudación por el
+            # tiempo que tardó Fase 2).
             if pendiente_registrar_inicio_canal_a:
-                iteracion_inicio_canal_a_real = iteracion_actual
+                reloj_inicio_canal_a = reloj_actual
                 pendiente_registrar_inicio_canal_a = False
                 self._log(
                     f"it={iteracion_actual:4d} | Canal A: inicio real registrado "
-                    f"(ventana finaliza en it≈{iteracion_actual + self._ventana_canal_a}).",
+                    f"(ventana finaliza en ≈{reloj_actual + self._ventana_canal_a} {unidad}).",
                     nivel="FASE3",
                 )
 
             # ── ESTADO: Canal A activo ────────────────────────────────────
             # Los algoritmos están corriendo con RMP aplicado.
-            # Esperamos hasta que hayan completado ventana_canal_a
-            # iteraciones reales desde que se inició Canal A.
-            if iteracion_inicio_canal_a_real is not None:
-                iteraciones_transcurridas = (
-                    iteracion_actual - iteracion_inicio_canal_a_real
-                )
-                if iteraciones_transcurridas < self._ventana_canal_a:
+            # Esperamos hasta que se haya consumido ventana_canal_a del
+            # presupuesto desde que se inició Canal A.
+            if reloj_inicio_canal_a is not None:
+                transcurrido = reloj_actual - reloj_inicio_canal_a
+                if transcurrido < self._ventana_canal_a:
                     time.sleep(0.02)
                     continue
 
                 # Ventana de Canal A completa → pausar y evaluar
                 self._log(
                     f"it={iteracion_actual:4d} | Canal A: ventana de "
-                    f"{self._ventana_canal_a} iter completada "
-                    f"({iteracion_inicio_canal_a_real} → {iteracion_actual}). "
+                    f"{self._ventana_canal_a} {unidad} completada "
+                    f"({reloj_inicio_canal_a} → {reloj_actual} {unidad}). "
                     f"Pausando para evaluar ΔScore...",
                     nivel="FASE3",
                 )
                 t_pausa = time.time()
                 self._pausar_algoritmos()
-                iteracion_inicio_canal_a_real = None  # limpiar estado
+                reloj_inicio_canal_a = None  # limpiar estado
 
                 # Evaluar si Canal A tuvo efecto y decidir si escalar a B
                 self._evaluar_post_canal_a(iteracion_actual, hilo_a, hilo_b)
                 tiempo_en_middleware += time.time() - t_pausa
-                iteracion_monitoreada = iteracion_actual
+                reloj_monitoreo = self._reloj()
                 self._reanudar_algoritmos()
                 continue
 
             # ── ESTADO: Monitoreo pasivo ──────────────────────────────────
-            # Esperar que pasen frecuencia_monitoreo iteraciones
-            if iteracion_actual < iteracion_monitoreada + self.frecuencia_monitoreo:
+            # Esperar que se consuma frecuencia_monitoreo del presupuesto
+            if reloj_actual < reloj_monitoreo + self.frecuencia_monitoreo:
                 time.sleep(0.02)
                 continue
 
@@ -880,14 +1019,22 @@ class Orquestador:
                 # abort): reanudamos normalmente
                 if resultado:
                     tiempo_en_middleware += time.time() - t_pausa
-                iteracion_monitoreada = iteracion_actual
+                reloj_monitoreo = self._reloj()
                 self._reanudar_algoritmos()
 
         hilo_a.join()
         hilo_b.join()
 
         t_total = time.time() - t_inicio
-        self.resumen.n_iteraciones_totales = self.n_iteraciones
+        self.resumen.n_iteraciones_totales = max(
+            len(self.algoritmo_a.historial), len(self.algoritmo_b.historial))
+        self.resumen.max_fes = self.max_fes or 0
+        self.resumen.fes_consumidas_a = int(self.algoritmo_a.fes_propias)
+        self.resumen.fes_consumidas_b = int(self.algoritmo_b.fes_propias)
+        self.resumen.fes_consumidas_total = (
+            int(self.problema.fes) if self.problema is not None
+            else self.resumen.fes_consumidas_a + self.resumen.fes_consumidas_b
+        )
         self.resumen.tiempo_total_segundos = round(t_total, 3)
         self.resumen.tiempo_pausado_en_middleware_segundos = round(
             tiempo_en_middleware, 3)
@@ -895,6 +1042,23 @@ class Orquestador:
             self.algoritmo_a.mejor_fitness_historico)
         self.resumen.fitness_final_algoritmo_b = float(
             self.algoritmo_b.mejor_fitness_historico)
+        self.resumen.mejor_fitness_sistema = min(
+            self.resumen.fitness_final_algoritmo_a,
+            self.resumen.fitness_final_algoritmo_b,
+        )
+
+        # Error respecto al óptimo global conocido: cuánto se acercó el
+        # sistema al mínimo de la función. Es la métrica de comparación del
+        # setup experimental. Solo se calcula si se pasó `problema` (siempre
+        # en la vía MaxFES; opcional en la vía clásica).
+        if self.problema is not None and hasattr(self.problema, "error"):
+            self.resumen.optimo_conocido = float(self.problema.optimo_global)
+            self.resumen.error_algoritmo_a = self.problema.error(
+                self.resumen.fitness_final_algoritmo_a)
+            self.resumen.error_algoritmo_b = self.problema.error(
+                self.resumen.fitness_final_algoritmo_b)
+            self.resumen.error_sistema = self.problema.error(
+                self.resumen.mejor_fitness_sistema)
 
         self._imprimir_resumen()
         self._guardar_log()
@@ -904,10 +1068,15 @@ class Orquestador:
 
     def _imprimir_resumen(self):
         r = self.resumen
+        unidad = self._unidad_reloj()
         self._log("=" * 60)
         self._log("RESUMEN FINAL")
-        self._log(f"  Iteraciones totales:          {r.n_iteraciones_totales}")
-        self._log(f"  Ventana Canal A (10%):        {self._ventana_canal_a} iter")
+        if self._modo_fes:
+            self._log(f"  MaxFES (presupuesto):         {r.max_fes}")
+            self._log(f"  FES consumidas (total A+B):   {r.fes_consumidas_total}")
+            self._log(f"  FES consumidas A / B:         {r.fes_consumidas_a} / {r.fes_consumidas_b}")
+        self._log(f"  Generaciones alcanzadas:      {r.n_iteraciones_totales}")
+        self._log(f"  Ventana Canal A (10%):        {self._ventana_canal_a} {unidad}")
         self._log(f"  Activaciones Fase 2:          {r.n_activaciones_fase2}")
         self._log(f"  Re-entrenamientos (cambio fuente): {r.n_reentrenamientos_por_cambio_fuente}")
         self._log(f"  Activaciones Fase 3:          {r.n_activaciones_fase3}")
@@ -917,6 +1086,11 @@ class Orquestador:
         self._log(f"  Instancias inyectadas total:  {r.n_instancias_inyectadas_total}")
         self._log(f"  Fitness final algoritmo A:    {r.fitness_final_algoritmo_a:.4f}")
         self._log(f"  Fitness final algoritmo B:    {r.fitness_final_algoritmo_b:.4f}")
+        self._log(f"  Mejor fitness del sistema:    {r.mejor_fitness_sistema:.4f}")
+        if r.error_sistema == r.error_sistema:  # no es NaN
+            self._log(f"  Óptimo conocido f(x*):        {r.optimo_conocido:.4f}")
+            self._log(f"  Error A / B:                  {r.error_algoritmo_a:.4e} / {r.error_algoritmo_b:.4e}")
+            self._log(f"  Error del sistema (→0 ideal): {r.error_sistema:.4e}")
         self._log(f"  Tiempo total:                 {r.tiempo_total_segundos:.2f}s")
         self._log(f"  Tiempo pausado en middleware: {r.tiempo_pausado_en_middleware_segundos:.2f}s")
         self._log("=" * 60)
