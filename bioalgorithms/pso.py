@@ -19,7 +19,7 @@ class PSO(AlgoritmoBioinspirado):
     def __init__(self, funcion_objetivo, n_individuos, n_dimensiones, limites,
                  max_iteraciones=None, semilla=None,
                  w_max=0.9, w_min=0.4, c1=2.0, c2=2.0,
-                 *, max_fes=None, fraccion_presupuesto=0.5):
+                 *, max_fes=None, fraccion_presupuesto=0.7):
         super().__init__(funcion_objetivo, n_individuos, n_dimensiones,
                           limites, max_iteraciones, semilla,
                           max_fes=max_fes,
@@ -65,7 +65,9 @@ class PSO(AlgoritmoBioinspirado):
         #     (max_fes * fraccion_presupuesto). El setup experimental exige
         #     que la inercia decreciente se calcule contra el MaxFES total del
         #     experimento; como aquí dos algoritmos comparten ese total, se usa
-        #     la fracción que se estima consumirá PSO (~50 % por defecto).
+        #     la fracción que se estima consumirá PSO (~0.7 por defecto: el
+        #     reparto medido PSO/DE fue ~70/30; decisión provisional, ver
+        #     docs/configuracion_experimental.md).
         #   - Vía clásica: contra el número total de generaciones.
         if self.max_fes is not None:
             presupuesto_propio = max(self.max_fes * self.fraccion_presupuesto, 1)

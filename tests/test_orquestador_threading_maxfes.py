@@ -9,7 +9,7 @@ iteraciones), aquí:
   objetivo (MaxFES), agregado sobre los dos algoritmos que corren en
   paralelo. Lo cuenta ProblemaCEC2022.fes (contador thread-safe compartido).
 - La inercia decreciente de PSO se calcula contra su cuota estimada del
-  presupuesto (MaxFES * fraccion_presupuesto, 0.5 por defecto).
+  presupuesto (MaxFES * fraccion_presupuesto, 0.7 por defecto).
 - El warm-up del 15%, la ventana de Canal A y el cooldown se miden en
   evaluaciones agregadas, no en iteraciones.
 
@@ -41,7 +41,7 @@ def main():
     # (max_iteraciones) chocaría con `semilla`.
     alg_a = PSO(problema, POP, problema.ndim, problema.limites, semilla=0,
                 w_max=0.9, w_min=0.4, c1=2.0, c2=2.0,
-                max_fes=MAX_FES)  # fraccion_presupuesto = 0.5 por defecto
+                max_fes=MAX_FES)  # fraccion_presupuesto = 0.7 por defecto
 
     # DE conservador como algoritmo B (propenso a estancarse)
     alg_b = DE(problema, POP, problema.ndim, problema.limites, semilla=42,

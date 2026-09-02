@@ -21,7 +21,7 @@ Fase 3/
 ├── bioalgorithms/
 │   ├── base.py              # AlgoritmoBioinspirado + EstadoIteracion; contador fes_propias;
 │   │                        #   parámetros max_fes / fraccion_presupuesto
-│   ├── pso.py               # PSO; inercia decrece contra la cuota MaxFES·0.5 (o iteraciones)
+│   ├── pso.py               # PSO; inercia decrece contra la cuota MaxFES·0.7 (o iteraciones)
 │   └── de.py                # DE/rand/1/bin (F=0.2, CR=0.3 por defecto)
 │
 ├── problems/
@@ -51,6 +51,10 @@ Fase 3/
 │   ├── test_fase3_transferencia_exitosa.py
 │   ├── test_orquestador_threading.py          # integración completa — vía iteraciones (clásica)
 │   └── test_orquestador_threading_maxfes.py   # integración completa — vía MaxFES
+│
+├── docs/
+│   ├── setup_experimental.md            # protocolo de evaluación (adaptado del PDF a CEC 2022)
+│   └── configuracion_experimental.md    # config única congelada + registro de decisiones
 │
 ├── .gitignore              # __pycache__/, entornos, cachés de test, logs de prueba
 ├── requirements.txt
@@ -93,7 +97,7 @@ MAX_FES = 120_000            # presupuesto total A+B (5e3 / 5e4 / 5e5 / 5e6 en e
 # semilla SIEMPRE como keyword; max_iteraciones se omite en la vía MaxFES
 alg_a = PSO(problema, 30, problema.ndim, problema.limites, semilla=42,
             w_max=0.9, w_min=0.4, c1=2.0, c2=2.0,
-            max_fes=MAX_FES)            # inercia decrece contra MAX_FES * 0.5 (su cuota)
+            max_fes=MAX_FES)            # inercia decrece contra MAX_FES * 0.7 (su cuota estimada)
 
 alg_b = DE(problema, 30, problema.ndim, problema.limites, semilla=500,
            F=0.2, CR=0.3, max_fes=MAX_FES)
@@ -197,9 +201,9 @@ Hilo B (objetivo) ──┘
 |---|---|---|
 | Criterio de parada | MaxFES agregado A+B (contador en `ProblemaCEC2022`); sobrepaso ≤ pop_size | Definitiva |
 | Métrica de comparación | error = `f_obtenido − f(x*)`; `f(x*)` de tabla `OPTIMO_GLOBAL_CEC2022` validada contra opfunu | Definitiva |
-| Progreso inercia PSO | contra su cuota estimada `MaxFES · 0.5` (reparto ~50/50 entre hilos) | Provisional |
+| Progreso inercia PSO | contra su cuota estimada `MaxFES · 0.7` (split medido PSO/DE ≈ 70/30) | Provisional — ver `docs/configuracion_experimental.md` (D-1b) |
 | FIR | `1 - exp(-3·max(0, f_{t-20} - f_t) / (\|f_{t-20}\| + ε))` — ventana en generaciones del objetivo | Definitiva |
-| Pesos Score | W_FIR=0.3, W_DWD=0.7, W_HDF=0.0 | Provisional |
+| Pesos Score | W_FIR=0.3, W_DWD=0.7, W_HDF=0.0 | Provisional — validar por sensibilidad, ver `docs/configuracion_experimental.md` (D-1a) |
 | Umbral estancamiento | S < 0.2 tras 15% de **MaxFES** consumido | Definitiva |
 | Ventana historial Fase 2 | Últimas 50 generaciones de la fuente | Definitiva |
 | Criterio élite | Percentil 20% fitness + ranking Shapley | Definitiva |
@@ -215,7 +219,7 @@ Hilo B (objetivo) ──┘
 | Paralelismo | Threading Solución A (pseudo-paralelo, GIL) | Definitiva |
 | Pausa threading | Bucle activo `while evento.is_set(): sleep(0.005)` | Definitiva |
 | FIR post-transferencia | Historial recortado desde última transferencia | Definitiva |
-| Cierre de ciclo | Provisional (sin Fase 4) | Provisional |
+| Cierre de ciclo | Criterio mínimo (objetivo deja de estar estancado); Fase 4 solo se aborda en la redacción | Provisional |
 
 ---
 
@@ -266,13 +270,32 @@ Hilo B (objetivo) ──┘
   expresados contra el presupuesto de evaluaciones. Vía clásica por
   iteraciones conservada para compatibilidad.
 - Tests unitarios para cada fase (Fases 0–3) + `test_orquestador_threading_maxfes.py`
+- **Configuración única congelada** (`docs/configuracion_experimental.md`): tabla de
+  todos los parámetros para las 8 configuraciones experimentales + registro de las
+  decisiones tomadas (D-1a … D-1e) con lo que queda pendiente de revisar a fondo.
 
 ### Pendiente ⏳
-- **Fase 4 / Fase Experimental**: sustituye la comprobación formal. Debe redactarse como apartado separado fuera del código. Incluiría: ΔScore estructurado, auditoría SHAP de asimilación, retorno formal al ciclo de monitoreo pasivo.
-- **Protocolo experimental**: harness de corridas (51 semillas × funciones × 2 dimensionalidades × 4 valores de MaxFES: 5e3 / 5e4 / 5e5 / 5e6), corridas independientes por valor de MaxFES, análisis estadístico (Friedman + Shaffer, Wilcoxon). El núcleo MaxFES ya está; falta el grid y el análisis.
-- **Ampliación de benchmarks**: el wrapper actual solo cubre CEC 2022 con D∈{10,20}; el setup pide además CEC 2014/2017 y D=50 (conjuntos CEC_72_10 / CEC_72_50).
-- **Comportamiento con MaxFES bajo (5e3)**: con presupuesto tan chico el middleware puede no llegar a activarse (necesita >50 generaciones de la fuente antes de la primera extracción). Es un hallazgo esperado para la discusión, no un bug.
-- **Calibración de pesos del Score**: W_FIR y W_DWD son provisionales (empíricos).
+
+**Alcance fijado:** evaluación **solo sobre CEC 2022** (12 funciones, D∈{10,20}).
+No se amplía a CEC 2014/2017 ni D=50. La Fase 4 (cierre formal del ciclo) **no**
+se implementa: se aborda únicamente en la redacción. Protocolo completo en
+`docs/setup_experimental.md`.
+
+- **Harness experimental** (`experimentos/`): 4 896 corridas del algoritmo propuesto
+  (12 funciones × 2 dim × 4 MaxFES × 51 semillas), lista fija de semillas,
+  checkpoint + paralelismo por proceso, salida cruda en `resultados/`.
+- **Competidores** (20–25 metaheurísticas diversas): sourcing de implementaciones
+  reproducibles. **Riesgo:** varios ganadores CEC (EA4eig, APGSK-IMODE, UMOEAII)
+  solo tienen código MATLAB — decidir portar / usar librería Python / reducir lista.
+- **Análisis** (`analisis/`): 8 rankings (2 dim × 4 MaxFES) con empates a 10⁻⁸,
+  Friedman + Shaffer, Wilcoxon better/equal/worse, desviación de rangos, figuras.
+- **Validaciones diferidas** (decididas, pendientes de ejecución — ver `docs/configuracion_experimental.md`):
+  - D-1a — análisis de sensibilidad de los pesos del Score (necesita el harness).
+  - D-1b — revisar si `fraccion_presupuesto=0.7` fijo basta o conviene proyección adaptativa.
+  - D-1d — con MaxFES=5e3 el middleware queda inerte (≈ PSO+DE sin transferencia); se acepta y se discute en el paper (§9).
+  - D-1e — `test_barrera_seguridad.py` CASO 3 falla por una expectativa desactualizada del MMD centrado; no se toca ahora.
+- **Redacción**: Fase 4 como apartado separado; sección de resultados con la
+  discusión obligatoria del setup (§9).
 - **Ablation Study**: descartado por tiempo, queda como trabajo futuro.
 
 ---
@@ -327,8 +350,9 @@ tqdm>=4.65
 
 | Archivo | Qué hace | Dónde continuar |
 |---|---|---|
-| `problems/cec2022_wrapper.py` | Funciones CEC 2022 + **contador FES agregado** (`.fes`) | Añadir CEC 2014/2017 y D=50 |
-| `middleware/orquestador.py` | Ciclo completo, threading, log, vía MaxFES / clásica | Implementar Fase Experimental |
+| `problems/cec2022_wrapper.py` | Funciones CEC 2022 (12, D∈{10,20}) + contador FES agregado (`.fes`) + `error()` | — (alcance cerrado) |
+| `middleware/orquestador.py` | Ciclo completo, threading, log, vía MaxFES / clásica | Consumir desde `experimentos/` (harness) |
+| `docs/setup_experimental.md` | Protocolo de evaluación (10 secciones, adaptado a CEC 2022) | Spec del harness y del análisis |
 | `middleware/deteccion.py` | Score S, roles, FIR; warm-up 15% por MaxFES | Calibrar pesos W_FIR / W_DWD |
 | `middleware/extraccion.py` | XGBoost + FastSHAP | Ajustar ventana historial (actual: 50 gen) |
 | `middleware/transferencia.py` | Canal A y B, RMP, EstadoTransferencia | Ajustar RMP inicial si se desea |

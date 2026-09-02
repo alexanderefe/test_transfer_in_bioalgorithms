@@ -57,7 +57,7 @@ class AlgoritmoBioinspirado(ABC):
     def __init__(self, funcion_objetivo, n_individuos: int, n_dimensiones: int,
                  limites: np.ndarray, max_iteraciones: int = None,
                  semilla: int = None, *, max_fes: int = None,
-                 fraccion_presupuesto: float = 0.5):
+                 fraccion_presupuesto: float = 0.7):
         """
         funcion_objetivo: callable que recibe un vector x (n_dimensiones,) y
                            retorna un escalar (fitness). Para este proyecto
@@ -76,10 +76,17 @@ class AlgoritmoBioinspirado(ABC):
                  dependientes del presupuesto (p. ej. la inercia decreciente de
                  PSO) se calculan contra él en vez de contra `max_iteraciones`.
         fraccion_presupuesto: fracción de `max_fes` que se ESTIMA consumirá
-                 este algoritmo (el resto lo consume el otro hilo). Por defecto
-                 0.5, asumiendo un reparto ~50/50 entre los dos algoritmos que
-                 corren en paralelo. Se usa para dimensionar el "progreso"
-                 [0, 1] de los esquemas temporales de este algoritmo.
+                 este algoritmo (el resto lo consume el otro hilo). Se usa
+                 para dimensionar el "progreso" [0, 1] de los esquemas
+                 temporales de este algoritmo (solo PSO lo usa hoy, para su
+                 inercia decreciente).
+                 Por defecto 0.7: el reparto medido en el par PSO(fuente)/
+                 DE(objetivo) sobre CEC 2022 fue ~70/30 a favor de PSO (las
+                 generaciones de PSO son vectorizadas y más rápidas que el
+                 bucle por individuo de DE, así que PSO completa más
+                 evaluaciones bajo el mismo presupuesto compartido).
+                 DECISIÓN PROVISIONAL — pendiente de revisión: el split real
+                 varía por función y dimensión; ver docs/configuracion_experimental.md.
         """
         self.n_individuos = n_individuos
         self.n_dimensiones = n_dimensiones
