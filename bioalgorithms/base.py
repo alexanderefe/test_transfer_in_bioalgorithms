@@ -57,7 +57,7 @@ class AlgoritmoBioinspirado(ABC):
     def __init__(self, funcion_objetivo, n_individuos: int, n_dimensiones: int,
                  limites: np.ndarray, max_iteraciones: int = None,
                  semilla: int = None, *, max_fes: int = None,
-                 fraccion_presupuesto: float = 0.7):
+                 fraccion_presupuesto: float = 0.5):
         """
         funcion_objetivo: callable que recibe un vector x (n_dimensiones,) y
                            retorna un escalar (fitness). Para este proyecto
@@ -80,13 +80,12 @@ class AlgoritmoBioinspirado(ABC):
                  para dimensionar el "progreso" [0, 1] de los esquemas
                  temporales de este algoritmo (solo PSO lo usa hoy, para su
                  inercia decreciente).
-                 Por defecto 0.7: el reparto medido en el par PSO(fuente)/
-                 DE(objetivo) sobre CEC 2022 fue ~70/30 a favor de PSO (las
-                 generaciones de PSO son vectorizadas y más rápidas que el
-                 bucle por individuo de DE, así que PSO completa más
-                 evaluaciones bajo el mismo presupuesto compartido).
-                 DECISIÓN PROVISIONAL — pendiente de revisión: el split real
-                 varía por función y dimensión; ver docs/configuracion_experimental.md.
+                 Por defecto 0.5: con el planificador cooperativo determinista
+                 (D-2, docs/configuracion_experimental.md) A y B alternan
+                 generación por generación, y con poblaciones iguales eso
+                 reparte el presupuesto EXACTAMENTE 50/50 — ya no es una
+                 estimación empírica del scheduling (antes, con threading no
+                 determinista, el split emergente medido era ~70/30).
         """
         self.n_individuos = n_individuos
         self.n_dimensiones = n_dimensiones

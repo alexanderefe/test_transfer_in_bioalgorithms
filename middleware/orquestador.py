@@ -1,28 +1,27 @@
 """
-Orquestador con threading — Solución A (middleware/orquestador.py)
+Orquestador — planificador cooperativo determinista (middleware/orquestador.py)
 
-Implementa la Solución A acordada: tres hilos corriendo en el mismo
-proceso con memoria compartida.
+DECISIÓN D-2 (docs/configuracion_experimental.md): la versión anterior
+corría PSO y DE en dos `threading.Thread`, pausados/reanudados por el
+middleware vía `threading.Event`. Bajo el GIL eso nunca fue paralelismo
+real — era una forma de intercalar "avanza A", "avanza B", "el middleware
+mira y quizá interviene" cuyo ORDEN dependía del scheduler del sistema
+operativo. Se detectó que la misma (función, semilla) daba resultados
+distintos entre corridas idénticas (el reparto de FES entre A y B variaba
+según el scheduling), violando la reproducibilidad exigida por el setup
+experimental (§10) e inflando la varianza de las 51 corridas.
 
-  Hilo 1 — Algoritmo A (PSO o DE)
-  Hilo 2 — Algoritmo B (PSO o DE)
-  Hilo 3 — Middleware (detección + extracción + transferencia)
+Este módulo reemplaza esa mecánica por un **planificador cooperativo de un
+solo hilo**: un bucle único alterna una generación de A, una de B, y cada
+`frecuencia_monitoreo` (evaluaciones agregadas o iteraciones, según la vía)
+ejecuta el ciclo del middleware directamente — sin locks, sin eventos, sin
+sleeps de espera activa. El orden de ejecución queda fijado por el código,
+no por el sistema operativo: dada la misma semilla, el resultado es
+siempre el mismo.
 
-MECANISMO DE PAUSA (acordado explícitamente):
-  Cuando el middleware detecta que debe entrar a Fase 2 o Fase 3
-  (operaciones costosas: XGBoost + FastSHAP + Wasserstein + MMD),
-  señaliza a ambos hilos de algoritmo que se detengan. Los hilos
-  verifican esta señal ENTRE ITERACIONES (nunca a mitad de una), de
-  modo que no se interrumpe ningún paso de cálculo interno. Solo cuando
-  ambos confirman estar pausados, el middleware ejecuta la extracción
-  y transferencia. Al terminar, reanuda ambos hilos y el ciclo continúa.
-
-MECANISMO DE SINCRONIZACIÓN (threading.Event):
-  - evento_pausa: cuando está SET, los hilos de algoritmo deben detenerse
-    y esperar. Cuando está CLEAR, pueden avanzar.
-  - evento_algoritmo_a_pausado / evento_algoritmo_b_pausado: cada hilo
-    confirma al middleware que está efectivamente pausado antes de que
-    este empiece a trabajar con los datos.
+Con poblaciones iguales en A y B, la alternancia estricta reparte el
+presupuesto exactamente 50/50 (antes era un ~70/30 emergente del
+scheduling, ver D-1b).
 
 LOG:
   - Consola en tiempo real: mensajes con timestamp para cada evento
@@ -40,7 +39,6 @@ ROLES FUENTE/OBJETIVO:
   ciclo anterior.
 """
 
-import threading
 import time
 import json
 import datetime
@@ -54,7 +52,9 @@ from middleware.deteccion import (
     calcular_score, fuente_en_condiciones_optimas,
     asignar_roles_dinamicos, UMBRAL_ESTANCAMIENTO,
 )
-from middleware.extraccion import extraer_conocimiento, VENTANA_HISTORIAL_FUENTE
+from middleware.extraccion import (
+    extraer_conocimiento, VENTANA_HISTORIAL_FUENTE, EPOCHS_EXPLAINER,
+)
 from middleware.transferencia import (
     EstadoTransferencia, ejecutar_ciclo_transferencia, CanalActivo,
     FRACCION_VENTANA_CANAL_A, aplicar_canal_a, aplicar_canal_b,
@@ -108,6 +108,12 @@ class ResumenEjecucion:
     n_iteraciones_totales: int = 0     # generaciones alcanzadas (max de los dos
                                         # algoritmos); con la vía MaxFES no es un
                                         # tope prefijado sino lo que se alcanzó
+    n_generaciones_a: int = 0          # generaciones completadas por cada algoritmo
+    n_generaciones_b: int = 0
+    fes_primera_activacion: float = float("nan")  # FES agregadas cuando el
+                                                   # middleware activó Fase 2 por
+                                                   # primera vez; queda NaN si
+                                                   # nunca llegó a actuar
     max_fes: int = 0                    # presupuesto de evaluaciones del experimento
     fes_consumidas_total: int = 0       # evaluaciones agregadas realmente gastadas
     fes_consumidas_a: int = 0
@@ -139,111 +145,23 @@ class ResumenEjecucion:
     log_fase3: list = field(default_factory=list)
 
 
-# ─── Hilo de algoritmo ───────────────────────────────────────────────────────
-
-class HiloAlgoritmo(threading.Thread):
-    """
-    Ejecuta un algoritmo bioinspirado iteración a iteración, verificando
-    entre cada iteración si debe pausarse. La pausa ocurre SOLO entre
-    iteraciones completas, nunca a mitad de un paso de cálculo interno.
-    """
-
-    def __init__(self, algoritmo, nombre: str,
-                 evento_pausa: threading.Event,
-                 evento_pausado: threading.Event,
-                 parada_global: threading.Event,
-                 n_iteraciones: int = None,
-                 problema=None, max_fes: int = None):
-        super().__init__(daemon=True)
-        self.algoritmo = algoritmo
-        self.nombre = nombre
-        self.evento_pausa = evento_pausa
-        self.evento_pausado = evento_pausado
-        self.parada_global = parada_global
-        self.n_iteraciones = n_iteraciones      # tope de seguridad (opcional)
-        self.problema = problema                 # provee .fes (contador agregado)
-        self.max_fes = max_fes
-        self.terminado = False
-        self._lock_historial = threading.Lock()
-
-    def _presupuesto_agotado(self) -> bool:
-        """
-        True si arrancar otra generación se pasaría del presupuesto MaxFES.
-        Se comprueba ANTES de cada generación: si la generación completa
-        (n_individuos evaluaciones) no cabe en lo que queda de presupuesto,
-        no se arranca. El sobrepaso máximo posible es de ~n_individuos por
-        hilo si ambos hilos superan el guard en la misma ventana de tiempo
-        (convención CEC: tolerado).
-        """
-        if self.problema is None or self.max_fes is None:
-            return False
-        return self.problema.fes + self.algoritmo.n_individuos > self.max_fes
-
-    def run(self):
-        iteraciones_hechas = 0
-        while not self.parada_global.is_set():
-            # Criterio de parada por presupuesto (vía MaxFES).
-            if self._presupuesto_agotado():
-                self.parada_global.set()
-                break
-            # Tope de seguridad por iteraciones (vía clásica, u opcional).
-            if self.n_iteraciones is not None and iteraciones_hechas >= self.n_iteraciones:
-                break
-
-            # Verificar si el middleware solicitó una pausa.
-            # Se verifica ENTRE iteraciones completas para no interrumpir
-            # ningún paso de cálculo interno del algoritmo.
-            if self.evento_pausa.is_set():
-                self.evento_pausado.set()  # confirmar al middleware que estoy pausado
-
-                # Esperar hasta que el middleware limpie el evento de pausa
-                # (evento_pausa.clear()). No se puede usar evento_pausa.wait()
-                # directamente porque wait() espera hasta que el evento esté
-                # SET — y ya lo está. Se necesita un evento de "permiso para
-                # reanudar" separado, implementado aquí como espera activa
-                # con sleep corto para no consumir CPU innecesariamente.
-                while self.evento_pausa.is_set() and not self.parada_global.is_set():
-                    time.sleep(0.005)
-
-                self.evento_pausado.clear()  # confirmar que reanudé
-
-                if self.parada_global.is_set():
-                    break
-
-            # Ejecutar una iteración (operación atómica desde el punto de
-            # vista del middleware: no se interrumpe a mitad)
-            with self._lock_historial:
-                self.algoritmo.ejecutar_iteracion()
-            iteraciones_hechas += 1
-
-        self.terminado = True
-
-    def obtener_historial_seguro(self):
-        """Lee el historial del algoritmo de forma thread-safe."""
-        with self._lock_historial:
-            return list(self.algoritmo.historial)
-
-    def obtener_mejor_fitness(self) -> float:
-        with self._lock_historial:
-            return self.algoritmo.mejor_fitness_historico
-
-
 # ─── Orquestador principal ───────────────────────────────────────────────────
 
 class Orquestador:
     """
-    Orquesta la ejecución paralela de dos algoritmos y el ciclo del
-    middleware (Fases 1 → 2 → 3 → vuelta a 1) con hilos.
+    Orquesta la ejecución cooperativa (un solo hilo, planificador
+    round-robin determinista — D-2) de dos algoritmos y el ciclo del
+    middleware (Fases 1 → 2 → 3 → vuelta a 1).
     """
 
     def __init__(self, algoritmo_a, algoritmo_b, limites: np.ndarray,
                  n_iteraciones: int = None, frecuencia_monitoreo: int = 5,
                  directorio_log: str = ".", nombre_log: str = "middleware_log",
-                 max_epochs_fastshap: int = 50,
+                 max_epochs_fastshap: int = EPOCHS_EXPLAINER,
                  cooldown_post_ciclo: int = None,
                  *, problema=None, max_fes: int = None,
                  frecuencia_monitoreo_fes: int = None,
-                 cooldown_fes: int = None):
+                 cooldown_fes: int = None, silencioso: bool = False):
         """
         algoritmo_a, algoritmo_b: instancias de AlgoritmoBioinspirado.
 
@@ -266,7 +184,8 @@ class Orquestador:
             `frecuencia_monitoreo_fes` es None en la vía MaxFES, se usa
             max(pop_a + pop_b, max_fes // 500).
         max_epochs_fastshap: épocas de entrenamiento del explainer
-            FastSHAP. Reducir para tests rápidos (ej. 10).
+            FastSHAP. Por defecto `EPOCHS_EXPLAINER` (20, decisión D-3).
+            Reducir aún más (ej. 3-5) solo para tests rápidos.
         cooldown_post_ciclo / cooldown_fes: espera mínima tras cerrar un
             ciclo antes de poder abrir uno nuevo, en la unidad de la vía
             correspondiente. Evita que el sistema re-detecte estancamiento
@@ -280,6 +199,7 @@ class Orquestador:
         self.directorio_log = directorio_log
         self.nombre_log = nombre_log
         self.max_epochs_fastshap = max_epochs_fastshap
+        self.silencioso = silencioso   # True => _log no imprime (útil en el harness)
 
         # ── Selección de la vía de parada ────────────────────────────────
         self._modo_fes = max_fes is not None
@@ -307,12 +227,6 @@ class Orquestador:
         # (igual criterio que la versión previa, que usaba `max(10, ...)` en
         # iteraciones).
         cota_min_ventana = (10 * pop_total) if self._modo_fes else 10
-
-        # Eventos de sincronización
-        self._evento_pausa = threading.Event()       # SET = pausar algoritmos
-        self._pausado_a = threading.Event()          # SET = A confirmó pausa
-        self._pausado_b = threading.Event()          # SET = B confirmó pausa
-        self._parada_global = threading.Event()      # SET = presupuesto agotado
 
         self.resumen = ResumenEjecucion()
         self._estado_transferencia = EstadoTransferencia()
@@ -346,8 +260,6 @@ class Orquestador:
         )
         self._fin_cooldown = 0                    # en unidad de la vía activa
         self._iteracion_ultima_transferencia = 0  # índice de snapshot del objetivo
-        self._hilo_a_ref = None  # se asigna en ejecutar()
-        self._hilo_b_ref = None
 
         self._conocimiento_ciclo_actual = None
         self._rol_fuente_activo = None
@@ -357,6 +269,8 @@ class Orquestador:
     # ── Logging ──────────────────────────────────────────────────────────────
 
     def _log(self, mensaje: str, nivel: str = "INFO"):
+        if self.silencioso:
+            return
         ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         prefijos = {"INFO": "ℹ", "FASE1": "①", "FASE2": "②",
                     "FASE3": "③", "OK": "✅", "WARN": "⚠", "ERR": "❌"}
@@ -390,33 +304,24 @@ class Orquestador:
     def _unidad_reloj(self) -> str:
         return "FES" if self._modo_fes else "iter"
 
-    # ── Pausa / reanudación ──────────────────────────────────────────────────
-
-    def _pausar_algoritmos(self):
+    def _puede_avanzar(self, algoritmo, generaciones_hechas: int) -> bool:
         """
-        Señaliza a ambos hilos que deben pausarse y espera confirmación
-        de que ambos llegaron a un punto seguro (entre iteraciones).
-        Si un hilo ya terminó (completó todas sus iteraciones), no puede
-        confirmar la pausa — se omite la espera para ese hilo.
-        """
-        self._evento_pausa.set()
-        # Solo esperar confirmación de hilos que aún están corriendo.
-        # Un hilo terminado nunca llamará a evento_pausado.set(), así que
-        # esperar su confirmación produciría un timeout de 30s innecesario.
-        if not self._hilo_a_ref.terminado:
-            self._pausado_a.wait(timeout=5)
-        if not self._hilo_b_ref.terminado:
-            self._pausado_b.wait(timeout=5)
+        True si el algoritmo puede correr otra generación sin pasarse del
+        presupuesto. Se comprueba ANTES de cada generación:
 
-    def _reanudar_algoritmos(self):
-        """Limpia la señal de pausa para que ambos hilos continúen."""
-        self._evento_pausa.clear()
+          - Vía MaxFES: si la generación completa (n_individuos evaluaciones)
+            no cabe en lo que queda del presupuesto AGREGADO (`problema.fes`),
+            no se arranca. Sobrepaso máximo posible: ~n_individuos por
+            algoritmo (convención CEC: tolerado — ver setup §2).
+          - Vía clásica: hasta completar `n_iteraciones` generaciones.
+        """
+        if self._modo_fes:
+            return self.problema.fes + algoritmo.n_individuos <= self.max_fes
+        return generaciones_hechas < self.n_iteraciones
 
     # ── Ciclo del middleware ─────────────────────────────────────────────────
 
-    def _ejecutar_ciclo_middleware(self, iteracion_actual: int,
-                                    hilo_a: HiloAlgoritmo,
-                                    hilo_b: HiloAlgoritmo) -> bool:
+    def _ejecutar_ciclo_middleware(self, iteracion_actual: int) -> bool:
         """
         Ejecuta el ciclo del middleware para la iteración actual.
 
@@ -441,8 +346,8 @@ class Orquestador:
 
         Retorna True si se activó Fase 2 o Fase 3 en esta llamada.
         """
-        hist_a = hilo_a.obtener_historial_seguro()
-        hist_b = hilo_b.obtener_historial_seguro()
+        hist_a = list(self.algoritmo_a.historial)
+        hist_b = list(self.algoritmo_b.historial)
 
         if not hist_a or not hist_b:
             return False
@@ -629,6 +534,9 @@ class Orquestador:
             self._rol_objetivo_activo = rol_objetivo
             self._rol_fuente_ultimo_ciclo = rol_fuente
             self.resumen.n_activaciones_fase2 += 1
+            if self.resumen.fes_primera_activacion != self.resumen.fes_primera_activacion:
+                # NaN => primera activación: registrar el reloj de presupuesto
+                self.resumen.fes_primera_activacion = float(self._reloj())
 
             t_fase2 = time.time() - t0
             self.resumen.log_fase2.append(asdict(EntradaLogFase2(
@@ -673,11 +581,12 @@ class Orquestador:
 
         # ── Estado 2: CICLO ACTIVO — aplicar Canal A o Canal B ───────────
         # Canal A: solo aplica RMP y retorna "canal_a_iniciado" para que
-        # el bucle principal reanude los algoritmos y espere ventana_canal_a
-        # iteraciones reales antes de evaluar el efecto.
+        # el bucle principal siga alternando generaciones de A y B durante
+        # ventana_canal_a antes de evaluar el efecto.
         #
-        # Canal B: intervención puntual (algoritmos permanecen pausados),
-        # se delega a _aplicar_canal_b() y se retorna "canal_b_aplicado".
+        # Canal B: intervención puntual y síncrona (no consume generaciones
+        # adicionales), se delega a _aplicar_canal_b() y se retorna
+        # "canal_b_aplicado".
         #
         # Abort (Wasserstein): ya manejado arriba, nunca llega aquí.
 
@@ -740,21 +649,19 @@ class Orquestador:
             )
             return "canal_a_iniciado"
 
-        # Canal B: inyección puntual, algoritmos permanecen pausados
+        # Canal B: inyección puntual y síncrona
         return self._aplicar_canal_b(
             iteracion_actual, alg_fuente, alg_objetivo, resultado_deteccion
         )
 
-    def _evaluar_post_canal_a(self, iteracion_actual: int,
-                               hilo_a: HiloAlgoritmo,
-                               hilo_b: HiloAlgoritmo) -> None:
+    def _evaluar_post_canal_a(self, iteracion_actual: int) -> None:
         """
         Evalúa si Canal A tuvo efecto tras ventana_canal_a iteraciones
         reales. Si ΔScore > umbral → éxito, RMP sube. Si no → escala a
-        Canal B inmediatamente (algoritmos siguen pausados).
+        Canal B inmediatamente.
         """
-        hist_a = hilo_a.obtener_historial_seguro()
-        hist_b = hilo_b.obtener_historial_seguro()
+        hist_a = list(self.algoritmo_a.historial)
+        hist_b = list(self.algoritmo_b.historial)
         hist_objetivo = (hist_a if self._rol_objetivo_activo == "a" else hist_b)
         alg_fuente = (self.algoritmo_a if self._rol_fuente_activo == "a"
                       else self.algoritmo_b)
@@ -795,7 +702,7 @@ class Orquestador:
         else:
             self._log(
                 f"it={iteracion_actual:4d} | Canal A insuficiente (ΔS={delta_score:.4f}). "
-                f"Escalando a Canal B (algoritmos siguen pausados)...",
+                f"Escalando a Canal B...",
                 nivel="WARN",
             )
             self._estado_transferencia.canal_activo = CanalActivo.CANAL_B
@@ -806,9 +713,8 @@ class Orquestador:
                           alg_fuente, alg_objetivo,
                           resultado_deteccion) -> str:
         """
-        Canal B: inyección puntual de instancias de élite. Los algoritmos
-        permanecen pausados. Filtra por MMD, inyecta, evalúa inmediatamente
-        (sin correr iteraciones adicionales).
+        Canal B: inyección puntual de instancias de élite. Filtra por MMD,
+        inyecta, evalúa inmediatamente (sin correr generaciones adicionales).
 
         Tras ejecutar Canal B, el ciclo se cierra SIEMPRE — ya sea que
         haya inyectado instancias o no. Canal B es una intervención final:
@@ -872,162 +778,130 @@ class Orquestador:
     # ── Máquina de estados del bucle principal ───────────────────────────────
 
     # Estados del bucle de control:
-    # MONITOREO   → esperando que pasen frecuencia_monitoreo iteraciones
-    # PAUSADO_F12 → algoritmos pausados, ejecutando Fase 1/2 + barrera
-    # CANAL_A     → algoritmos corriendo con RMP aplicado, esperando
-    #               que pasen ventana_canal_a iteraciones reales
-    # PAUSADO_EVAL→ algoritmos pausados, evaluando ΔScore post-Canal A
-    # CANAL_B     → algoritmos pausados, inyectando + evaluando MMD
-    # REANUDAR    → reanudando después de completar un ciclo
+    # MONITOREO → esperando que se consuma frecuencia_monitoreo del presupuesto
+    # CANAL_A   → algoritmos corriendo con RMP aplicado, contando la ventana
+    # EVAL_A    → evaluando ΔScore al cerrar la ventana de Canal A
+    # CANAL_B   → inyectando + evaluando MMD (intervención puntual)
 
     # ── Ejecución principal ──────────────────────────────────────────────────
 
     def ejecutar(self) -> ResumenEjecucion:
         """
-        Lanza los dos hilos de algoritmo y el bucle de monitoreo del
-        middleware. La pausa/reanudación de los algoritmos ahora sigue
-        la máquina de estados descrita en el docstring del módulo:
+        Planificador cooperativo determinista (D-2): un solo bucle alterna
+        una generación de A, una de B, y cada `frecuencia_monitoreo` ejecuta
+        el ciclo del middleware directamente — sin hilos, sin locks, sin
+        sleeps de espera activa. El orden de ejecución lo fija el código,
+        no el scheduler del sistema operativo: dada la misma semilla, el
+        resultado es siempre el mismo.
 
-        - Fase 2 completa, Wasserstein, MMD: algoritmos pausados.
-        - Canal A: algoritmos se REANUDAN para correr exactamente
-          ventana_canal_a iteraciones bajo el efecto del RMP, luego
-          se vuelven a pausar para evaluar el ΔScore.
-        - Canal B: intervención puntual, algoritmos pausados durante
-          la inyección y evaluación inmediata (sin iterar adicional).
+        - Fase 2 (extracción) y Fase 3 (Wasserstein, MMD, Canal A/B) se
+          ejecutan de forma síncrona en el momento del chequeo — no hace
+          falta "pausar" nada porque no hay nada más corriendo mientras
+          tanto.
+        - Canal A: tras aplicar el RMP, A y B siguen alternando generaciones
+          libremente durante `_ventana_canal_a`; al completarse, se evalúa
+          el ΔScore.
+        - Canal B: intervención puntual, se aplica y el ciclo se cierra en
+          el mismo chequeo (no consume generaciones adicionales).
         """
         unidad = self._unidad_reloj()
         if self._modo_fes:
             self._log(
-                f"Iniciando ejecución paralela (MaxFES={self.max_fes} evaluaciones "
-                f"agregadas A+B | monitoreo cada {self.frecuencia_monitoreo} FES | "
+                f"Iniciando ejecución (planificador determinista, MaxFES={self.max_fes} "
+                f"evaluaciones agregadas A+B | monitoreo cada {self.frecuencia_monitoreo} FES | "
                 f"ventana Canal A: {self._ventana_canal_a} FES "
                 f"({FRACCION_VENTANA_CANAL_A*100:.0f}% de MaxFES) | "
                 f"cooldown post-ciclo: {self._cooldown_post_ciclo} FES)")
         else:
             self._log(
-                f"Iniciando ejecución paralela ({self.n_iteraciones} iteraciones | "
-                f"monitoreo cada {self.frecuencia_monitoreo} iter. | "
+                f"Iniciando ejecución (planificador determinista, {self.n_iteraciones} "
+                f"iteraciones | monitoreo cada {self.frecuencia_monitoreo} iter. | "
                 f"ventana Canal A: {self._ventana_canal_a} iter "
                 f"({FRACCION_VENTANA_CANAL_A*100:.0f}% de {self.n_iteraciones}) | "
                 f"cooldown post-ciclo: {self._cooldown_post_ciclo} iter)")
         t_inicio = time.time()
 
-        tope_seguridad = None if self._modo_fes else self.n_iteraciones
-        hilo_a = HiloAlgoritmo(
-            self.algoritmo_a, "A",
-            self._evento_pausa, self._pausado_a, self._parada_global,
-            n_iteraciones=tope_seguridad,
-            problema=self.problema, max_fes=self.max_fes,
-        )
-        hilo_b = HiloAlgoritmo(
-            self.algoritmo_b, "B",
-            self._evento_pausa, self._pausado_b, self._parada_global,
-            n_iteraciones=tope_seguridad,
-            problema=self.problema, max_fes=self.max_fes,
-        )
-        # Guardar referencias para que _pausar_algoritmos pueda verificar
-        # si cada hilo ya terminó antes de esperar su confirmación de pausa.
-        self._hilo_a_ref = hilo_a
-        self._hilo_b_ref = hilo_b
+        terminado_a = terminado_b = False
+        gen_a = gen_b = 0
 
-        hilo_a.start()
-        hilo_b.start()
-
-        reloj_monitoreo = 0        # posición del reloj en el último monitoreo pasivo
+        reloj_monitoreo = 0          # posición del reloj en el último monitoreo pasivo
         reloj_inicio_canal_a = None  # posición del reloj donde Canal A empezó a correr
-        pendiente_registrar_inicio_canal_a = False  # flag: registrar en próxima lectura
         tiempo_en_middleware = 0.0
 
-        while not (hilo_a.terminado and hilo_b.terminado):
+        while not (terminado_a and terminado_b):
+            # ── Turno de A, turno de B (round-robin, una generación cada uno) ──
+            if not terminado_a:
+                if self._puede_avanzar(self.algoritmo_a, gen_a):
+                    self.algoritmo_a.ejecutar_iteracion()
+                    gen_a += 1
+                else:
+                    terminado_a = True
+            if not terminado_b:
+                if self._puede_avanzar(self.algoritmo_b, gen_b):
+                    self.algoritmo_b.ejecutar_iteracion()
+                    gen_b += 1
+                else:
+                    terminado_b = True
 
-            len_a = len(self.algoritmo_a.historial)
-            len_b = len(self.algoritmo_b.historial)
-            iteracion_actual = min(len_a, len_b)   # índice de generación / snapshot
-            reloj_actual = self._reloj()           # posición en el presupuesto
+            if terminado_a and terminado_b:
+                break
 
-            # Capturar la posición real de inicio de Canal A: se registra
-            # en el primer ciclo del bucle DESPUÉS de haber reanudado los
-            # algoritmos, garantizando que medimos desde donde realmente
-            # empezaron a correr con el RMP aplicado — no desde el punto
-            # donde se aplicó el RMP (anterior a la reanudación por el
-            # tiempo que tardó Fase 2).
-            if pendiente_registrar_inicio_canal_a:
-                reloj_inicio_canal_a = reloj_actual
-                pendiente_registrar_inicio_canal_a = False
-                self._log(
-                    f"it={iteracion_actual:4d} | Canal A: inicio real registrado "
-                    f"(ventana finaliza en ≈{reloj_actual + self._ventana_canal_a} {unidad}).",
-                    nivel="FASE3",
-                )
+            iteracion_actual = min(len(self.algoritmo_a.historial),
+                                   len(self.algoritmo_b.historial))
+            reloj_actual = self._reloj()
 
             # ── ESTADO: Canal A activo ────────────────────────────────────
-            # Los algoritmos están corriendo con RMP aplicado.
+            # A y B siguen alternando generaciones con RMP aplicado.
             # Esperamos hasta que se haya consumido ventana_canal_a del
             # presupuesto desde que se inició Canal A.
             if reloj_inicio_canal_a is not None:
                 transcurrido = reloj_actual - reloj_inicio_canal_a
                 if transcurrido < self._ventana_canal_a:
-                    time.sleep(0.02)
                     continue
 
-                # Ventana de Canal A completa → pausar y evaluar
                 self._log(
                     f"it={iteracion_actual:4d} | Canal A: ventana de "
                     f"{self._ventana_canal_a} {unidad} completada "
                     f"({reloj_inicio_canal_a} → {reloj_actual} {unidad}). "
-                    f"Pausando para evaluar ΔScore...",
+                    f"Evaluando ΔScore...",
                     nivel="FASE3",
                 )
-                t_pausa = time.time()
-                self._pausar_algoritmos()
-                reloj_inicio_canal_a = None  # limpiar estado
-
-                # Evaluar si Canal A tuvo efecto y decidir si escalar a B
-                self._evaluar_post_canal_a(iteracion_actual, hilo_a, hilo_b)
-                tiempo_en_middleware += time.time() - t_pausa
+                t0 = time.time()
+                self._evaluar_post_canal_a(iteracion_actual)
+                tiempo_en_middleware += time.time() - t0
+                reloj_inicio_canal_a = None
                 reloj_monitoreo = self._reloj()
-                self._reanudar_algoritmos()
                 continue
 
             # ── ESTADO: Monitoreo pasivo ──────────────────────────────────
             # Esperar que se consuma frecuencia_monitoreo del presupuesto
             if reloj_actual < reloj_monitoreo + self.frecuencia_monitoreo:
-                time.sleep(0.02)
                 continue
 
-            # Pausar y ejecutar Fase 1/2 + Wasserstein + primera acción
-            t_pausa = time.time()
-            self._pausar_algoritmos()
-
-            resultado = self._ejecutar_ciclo_middleware(
-                iteracion_actual, hilo_a, hilo_b
-            )
+            t0 = time.time()
+            resultado = self._ejecutar_ciclo_middleware(iteracion_actual)
 
             if resultado == "canal_a_iniciado":
-                # Canal A aplicado → reanudar para que corran ventana_canal_a iter
-                pendiente_registrar_inicio_canal_a = True  # registrar en próxima lectura
-                tiempo_en_middleware += time.time() - t_pausa
-                self._reanudar_algoritmos()
+                # El RMP ya quedó aplicado dentro de _ejecutar_ciclo_middleware;
+                # la ventana arranca AHORA (no hace falta esperar "la próxima
+                # lectura": sin hilos no hay latencia de scheduling que cubrir).
+                reloj_inicio_canal_a = self._reloj()
+                tiempo_en_middleware += time.time() - t0
                 self._log(
-                    f"it={iteracion_actual:4d} | Canal A: RMP aplicado, "
-                    f"algoritmos reanudados. Inicio real se registrará en "
-                    f"próxima lectura del historial.",
+                    f"it={iteracion_actual:4d} | Canal A: inicio registrado "
+                    f"(ventana finaliza en ≈{reloj_inicio_canal_a + self._ventana_canal_a} {unidad}).",
                     nivel="FASE3",
                 )
             else:
-                # Cualquier otro resultado (monitoreo pasivo, Canal B,
-                # abort): reanudamos normalmente
                 if resultado:
-                    tiempo_en_middleware += time.time() - t_pausa
+                    tiempo_en_middleware += time.time() - t0
                 reloj_monitoreo = self._reloj()
-                self._reanudar_algoritmos()
-
-        hilo_a.join()
-        hilo_b.join()
 
         t_total = time.time() - t_inicio
+        self.resumen.n_generaciones_a = len(self.algoritmo_a.historial)
+        self.resumen.n_generaciones_b = len(self.algoritmo_b.historial)
         self.resumen.n_iteraciones_totales = max(
-            len(self.algoritmo_a.historial), len(self.algoritmo_b.historial))
+            self.resumen.n_generaciones_a, self.resumen.n_generaciones_b)
         self.resumen.max_fes = self.max_fes or 0
         self.resumen.fes_consumidas_a = int(self.algoritmo_a.fes_propias)
         self.resumen.fes_consumidas_b = int(self.algoritmo_b.fes_propias)

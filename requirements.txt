@@ -11,3 +11,5 @@ torch>=2.0
 xgboost>=2.0
 scikit-learn>=1.3
 tqdm>=4.65
+pandas>=2.0        # harness experimental: resultados en Parquet
+pyarrow>=15.0      # backend Parquet de pandas

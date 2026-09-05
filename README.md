@@ -4,11 +4,16 @@
 **Autor:** Alexander Nicolas Farias Cifuentes
 **Profesor Guía:** Rodrigo Olivares Órdenes
 
+> Última actualización de este README: 2026-09-04. Si continúas este
+> proyecto desde una sesión/ventana de IA nueva, empieza por **"Estado
+> Actual del Proyecto"** más abajo — tiene el resumen de qué está hecho, qué
+> falta y en qué orden, con enlaces a `docs/` para el detalle de cada decisión.
+
 ---
 
 ## Descripción
 
-Middleware adaptativo que opera sobre dos algoritmos bioinspirados ejecutados en paralelo (threading), transfiriendo conocimiento del algoritmo con mejor desempeño (**fuente**) hacia el que presenta estancamiento (**objetivo**), de forma online y sin modificar la lógica interna de los algoritmos.
+Middleware adaptativo que opera sobre dos algoritmos bioinspirados ejecutados de forma cooperativa (planificador determinista round-robin, D-2), transfiriendo conocimiento del algoritmo con mejor desempeño (**fuente**) hacia el que presenta estancamiento (**objetivo**), de forma online y sin modificar la lógica interna de los algoritmos.
 
 El sistema detecta estancamiento mediante un Score compuesto, extrae conocimiento relevante con FastSHAP sobre un modelo subrogado XGBoost, y lo transfiere gradualmente usando dos canales jerárquicos protegidos por barreras de seguridad (Wasserstein + MMD).
 
@@ -21,7 +26,7 @@ Fase 3/
 ├── bioalgorithms/
 │   ├── base.py              # AlgoritmoBioinspirado + EstadoIteracion; contador fes_propias;
 │   │                        #   parámetros max_fes / fraccion_presupuesto
-│   ├── pso.py               # PSO; inercia decrece contra la cuota MaxFES·0.7 (o iteraciones)
+│   ├── pso.py               # PSO; inercia decrece contra la cuota MaxFES·0.5 (o iteraciones)
 │   └── de.py                # DE/rand/1/bin (F=0.2, CR=0.3 por defecto)
 │
 ├── problems/
@@ -34,7 +39,7 @@ Fase 3/
 │   ├── xgboost_wrapper.py   # Wrapper XGBoost como nn.Module (para MarginalImputer)
 │   ├── barrera_seguridad.py # Wasserstein (scipy.linprog) + MMD centrado
 │   ├── transferencia.py     # Canal A (RMP) + Canal B (inyección élite)
-│   └── orquestador.py       # Threading Solución A: 3 hilos; parada por MaxFES o iteraciones
+│   └── orquestador.py       # Planificador cooperativo determinista (D-2); parada por MaxFES o iteraciones
 │
 ├── fastshap_lib/            # Código fuente oficial iancovert/fastshap
 │   ├── fastshap.py          # FastSHAP + parche compatibilidad PyTorch ≥ 2.x
@@ -50,11 +55,23 @@ Fase 3/
 │   ├── test_fase3_transferencia.py
 │   ├── test_fase3_transferencia_exitosa.py
 │   ├── test_orquestador_threading.py          # integración completa — vía iteraciones (clásica)
-│   └── test_orquestador_threading_maxfes.py   # integración completa — vía MaxFES
+│   ├── test_orquestador_threading2.py         # ídem, par PSO↔PSO
+│   ├── test_orquestador_threading_maxfes.py   # integración completa — vía MaxFES
+│   ├── test_determinismo_orquestador.py       # criterio de aceptación de D-2
+│   └── test_experimentos.py                   # smoke del harness (middleware/pso/de)
+│
+├── experimentos/           # harness: semillas fijas, corrida única, parrilla, consolidación
+│   ├── semillas.json · semillas.py · generar_semillas.py
+│   ├── esquema.py          # esquema §11 (columnas, run_id, builders)
+│   ├── corrida.py          # correr_corrida(algoritmo, func, dim, max_fes, semilla)
+│   │                       #   algoritmos: "middleware" | "pso" | "de" (D-4, solos)
+│   ├── grid.py             # parrilla resumible + paralela (--algoritmo middleware,pso,de; --dry-run)
+│   └── consolidar.py       # resultados/corridas/*.parquet -> resultados/corridas.parquet
 │
 ├── docs/
-│   ├── setup_experimental.md            # protocolo de evaluación (adaptado del PDF a CEC 2022)
-│   └── configuracion_experimental.md    # config única congelada + registro de decisiones
+│   ├── setup_experimental.md            # protocolo de evaluación (adaptado del PDF a CEC 2022) + §11 datos
+│   ├── configuracion_experimental.md    # config única congelada + registro de decisiones (D-1a…D-4)
+│   └── competidores.md                  # roster candidato (27) — DESCARTADO (D-4), archivado
 │
 ├── .gitignore              # __pycache__/, entornos, cachés de test, logs de prueba
 ├── requirements.txt
@@ -97,7 +114,7 @@ MAX_FES = 120_000            # presupuesto total A+B (5e3 / 5e4 / 5e5 / 5e6 en e
 # semilla SIEMPRE como keyword; max_iteraciones se omite en la vía MaxFES
 alg_a = PSO(problema, 30, problema.ndim, problema.limites, semilla=42,
             w_max=0.9, w_min=0.4, c1=2.0, c2=2.0,
-            max_fes=MAX_FES)            # inercia decrece contra MAX_FES * 0.7 (su cuota estimada)
+            max_fes=MAX_FES)            # inercia decrece contra MAX_FES * 0.5 (su cuota exacta, D-2)
 
 alg_b = DE(problema, 30, problema.ndim, problema.limites, semilla=500,
            F=0.2, CR=0.3, max_fes=MAX_FES)
@@ -111,7 +128,7 @@ orq = Orquestador(
     frecuencia_monitoreo_fes=600,       # verificar Fase 1 cada 600 evaluaciones
     directorio_log="logs",
     nombre_log="experimento",
-    max_epochs_fastshap=10,             # reducir a 10 para pruebas rápidas; 50 para producción
+    max_epochs_fastshap=10,             # producción: 20 (default, D-3); 3-5 solo para tests
 )
 
 resumen = orq.ejecutar()
@@ -151,24 +168,24 @@ El orquestador imprime el log en tiempo real y guarda un archivo JSON en `logs/`
 - Cada algoritmo lleva además su propio `algoritmo.fes_propias`.
 - El middleware **no consume FES**: Fase 2 entrena sobre historial ya evaluado
   y Canal B inyecta instancias con su fitness heredado (sin re-evaluar).
-- **Sobrepaso:** un hilo no arranca una generación que no cabe en el
+- **Sobrepaso:** ningún algoritmo arranca una generación que no cabe en el
   presupuesto (`fes + n_individuos > MaxFES`); el sobrepaso máximo es ~`pop_size`
-  por hilo (convención CEC).
+  por algoritmo (convención CEC).
 
 ---
 
 ## Arquitectura — Ciclo de Transferencia
 
 ```
-Hilo A (fuente) ──┐        Parada: MaxFES = evaluaciones agregadas A+B (contador en el problema)
-                  ├──► Orquestador (middleware)
-Hilo B (objetivo) ──┘
+Algoritmo A (fuente) ──┐    Parada: MaxFES = evaluaciones agregadas A+B (contador en el problema)
+                       ├──► Orquestador (planificador cooperativo determinista, D-2)
+Algoritmo B (objetivo) ─┘   Round-robin: una generación de A, una de B, alternando
                          │
                     ① Fase 1 — Detección
                          │  S = 0.3·FIR + 0.7·DWD
                          │  activo tras 15% de MaxFES; S < 0.2 ∧ fuente_óptimo → activar ciclo
                          │
-                    ② Fase 2 — Extracción (algoritmos PAUSADOS)
+                    ② Fase 2 — Extracción (síncrona: no hay nada más corriendo mientras tanto)
                          │  XGBoost → R² (bloquear si R² < 0)
                          │  FastSHAP → valores Shapley ϕ
                          │  Élite: percentil 20% fitness + ranking ϕ
@@ -177,16 +194,16 @@ Hilo B (objetivo) ──┘
                          │
                     ③ Fase 3 — Transferencia
                          │
-                         ├─ Barrera Wasserstein (dura, algoritmos PAUSADOS)
+                         ├─ Barrera Wasserstein (dura, síncrona)
                          │  W₁ > θ_W → ABORTAR
                          │
                          ├─ Canal A — RMP paramétrico
                          │  RMP: 0.05→0.6, incremento 0.5·ΔS
-                         │  Algoritmos REANUDADOS por ventana = 10% de MaxFES (evaluaciones)
+                         │  A y B siguen alternando generaciones por ventana = 10% de MaxFES
                          │  Si payload vacío (PSO↔DE sin claves comunes) → Canal B directo
                          │  Evaluar ΔS > 0.02 → éxito / fracaso
                          │
-                         └─ Canal B — Inyección élite (algoritmos PAUSADOS)
+                         └─ Canal B — Inyección élite (síncrona, sin generaciones adicionales)
                             Filtro MMD (umbral precalculado en Fase 2)
                             Sustituye peores individuos del objetivo
                             Evaluación inmediata, sin iterar
@@ -201,7 +218,8 @@ Hilo B (objetivo) ──┘
 |---|---|---|
 | Criterio de parada | MaxFES agregado A+B (contador en `ProblemaCEC2022`); sobrepaso ≤ pop_size | Definitiva |
 | Métrica de comparación | error = `f_obtenido − f(x*)`; `f(x*)` de tabla `OPTIMO_GLOBAL_CEC2022` validada contra opfunu | Definitiva |
-| Progreso inercia PSO | contra su cuota estimada `MaxFES · 0.7` (split medido PSO/DE ≈ 70/30) | Provisional — ver `docs/configuracion_experimental.md` (D-1b) |
+| Progreso inercia PSO | contra su cuota `MaxFES · 0.5` — exacto, no medido (reparto 50/50 por el planificador round-robin) | Definitiva — D-1b resuelto junto con D-2 |
+| Determinismo / reproducibilidad | Planificador cooperativo (no threading) + `torch.manual_seed(0)` en Fase 2 + parche de semilla en `fastshap_lib/utils.py` (`ShapleySampler`) | Definitiva — D-2 resuelto, ver `docs/configuracion_experimental.md` |
 | FIR | `1 - exp(-3·max(0, f_{t-20} - f_t) / (\|f_{t-20}\| + ε))` — ventana en generaciones del objetivo | Definitiva |
 | Pesos Score | W_FIR=0.3, W_DWD=0.7, W_HDF=0.0 | Provisional — validar por sensibilidad, ver `docs/configuracion_experimental.md` (D-1a) |
 | Umbral estancamiento | S < 0.2 tras 15% de **MaxFES** consumido | Definitiva |
@@ -216,8 +234,7 @@ Hilo B (objetivo) ──┘
 | Bloqueo R² | Estrictamente negativo (R² < 0) | Definitiva |
 | Canal A inerte | Escalar a Canal B directo si payload vacío | Definitiva |
 | Cooldown post-ciclo | 10% de MaxFES (igual que ventana Canal A) | Definitiva |
-| Paralelismo | Threading Solución A (pseudo-paralelo, GIL) | Definitiva |
-| Pausa threading | Bucle activo `while evento.is_set(): sleep(0.005)` | Definitiva |
+| Planificador | Cooperativo determinista (round-robin, un solo hilo) — reemplazó al threading pseudo-paralelo (D-2) | Definitiva |
 | FIR post-transferencia | Historial recortado desde última transferencia | Definitiva |
 | Cierre de ciclo | Criterio mínimo (objetivo deja de estar estancado); Fase 4 solo se aborda en la redacción | Provisional |
 
@@ -225,9 +242,9 @@ Hilo B (objetivo) ──┘
 
 ## Bugs Resueltos Relevantes
 
-1. **Pausa threading falsa**: `threading.Event.wait()` retorna inmediatamente si el evento ya está SET. Solución: bucle `while self.evento_pausa.is_set(): sleep(0.005)`.
+1. ~~**Pausa threading falsa**~~: `threading.Event.wait()` retorna inmediatamente si el evento ya está SET. Solución de la época: bucle `while self.evento_pausa.is_set(): sleep(0.005)`. **Todo el mecanismo de pausa/hilos se eliminó en D-2** (planificador cooperativo determinista) — este bug y su parche ya no existen en el código, se dejan como registro histórico.
 
-2. **Timeout 30s en verificaciones**: cuando los algoritmos terminan sus iteraciones durante una pausa larga (Fase 2), el orquestador esperaba confirmación de pausa de hilos ya muertos. Solución: verificar `hilo.terminado` antes de `evento_pausado.wait()`.
+2. ~~**Timeout 30s en verificaciones**~~: cuando los algoritmos terminaban sus iteraciones durante una pausa larga (Fase 2), el orquestador esperaba confirmación de pausa de hilos ya muertos. Solución de la época: verificar `hilo.terminado` antes de `evento_pausado.wait()`. También obsoleto tras D-2 (sin hilos, sin pausas que confirmar).
 
 3. **Umbral MMD desfasado**: el umbral recalculado en Canal B (cuando el fuente ya convergió más) difería del umbral en el momento de extracción. Solución: precalcular y guardar el umbral en `ResultadoExtraccion.umbral_mmd_precalculado`.
 
@@ -259,48 +276,96 @@ Hilo B (objetivo) ──┘
 
 ## Estado Actual del Proyecto
 
+> **Para retomar en otra sesión/ventana de IA:** este README es la fuente de
+> verdad del estado general; el detalle de cada decisión (motivo, alternativas
+> consideradas, qué falta) vive en `docs/configuracion_experimental.md`
+> (registro D-1a…D-4) y `docs/setup_experimental.md` (protocolo de evaluación
+> completo). Léelos antes de tocar `middleware/` o `experimentos/`.
+
 ### Completado ✅
-- Fase 0: interfaz común (`AlgoritmoBioinspirado`), PSO, DE, wrapper CEC 2022
-- Fase 1: detección de estancamiento, roles dinámicos, historial FIR recortado
-- Fase 2: XGBoost + FastSHAP + selección élite + parámetros de escape + umbral MMD precalculado
-- Fase 3: Wasserstein + Canal A (RMP) + Canal B (MMD + inyección)
-- Orquestador: threading Solución A con pausa real, log dual (consola + JSON)
-- **Criterio de parada MaxFES**: contador agregado A+B en `ProblemaCEC2022`;
-  warm-up del 15%, ventana Canal A, cooldown y decaimiento de inercia PSO
-  expresados contra el presupuesto de evaluaciones. Vía clásica por
-  iteraciones conservada para compatibilidad.
-- Tests unitarios para cada fase (Fases 0–3) + `test_orquestador_threading_maxfes.py`
-- **Configuración única congelada** (`docs/configuracion_experimental.md`): tabla de
-  todos los parámetros para las 8 configuraciones experimentales + registro de las
-  decisiones tomadas (D-1a … D-1e) con lo que queda pendiente de revisar a fondo.
 
-### Pendiente ⏳
+**Núcleo del middleware (Fases 0–3):**
+- Fase 0: interfaz común (`AlgoritmoBioinspirado`), PSO, DE, wrapper CEC 2022.
+- Fase 1: detección de estancamiento (Score S), roles dinámicos fuente/objetivo, historial FIR recortado post-transferencia.
+- Fase 2: XGBoost (modelo subrogado) + FastSHAP oficial (iancovert/fastshap) + selección élite + parámetros de escape + umbral MMD precalculado.
+- Fase 3: barrera Wasserstein + Canal A (RMP paramétrico) + Canal B (inyección de élite filtrada por MMD).
+- Tests unitarios de cada fase (`tests/test_fase0…test_fase3_transferencia_exitosa.py`).
 
-**Alcance fijado:** evaluación **solo sobre CEC 2022** (12 funciones, D∈{10,20}).
-No se amplía a CEC 2014/2017 ni D=50. La Fase 4 (cierre formal del ciclo) **no**
-se implementa: se aborda únicamente en la redacción. Protocolo completo en
-`docs/setup_experimental.md`.
+**Criterio de parada y métrica (MaxFES):**
+- Contador de evaluaciones agregado A+B en `ProblemaCEC2022.fes` (thread-safe); `error()` y tabla `OPTIMO_GLOBAL_CEC2022` para la métrica de comparación (`f_obtenido − f(x*)`).
+- Warm-up 15%, ventana Canal A (10%), cooldown y decaimiento de inercia de PSO expresados como fracción de MaxFES. Vía clásica por iteraciones conservada para compatibilidad con los tests de Fase 0–3.
+- Traza de convergencia: `configurar_checkpoints()` / `error_checkpoints()` — best-so-far en 14 fracciones de FES.
 
-- **Harness experimental** (`experimentos/`): 4 896 corridas del algoritmo propuesto
-  (12 funciones × 2 dim × 4 MaxFES × 51 semillas), lista fija de semillas,
-  checkpoint + paralelismo por proceso, salida cruda en `resultados/`.
-- **Competidores** (20–25 metaheurísticas diversas): sourcing de implementaciones
-  reproducibles. **Riesgo:** varios ganadores CEC (EA4eig, APGSK-IMODE, UMOEAII)
-  solo tienen código MATLAB — decidir portar / usar librería Python / reducir lista.
-- **Análisis** (`analisis/`): 8 rankings (2 dim × 4 MaxFES) con empates a 10⁻⁸,
-  Friedman + Shaffer, Wilcoxon better/equal/worse, desviación de rangos, figuras.
-- **Validaciones diferidas** (decididas, pendientes de ejecución — ver `docs/configuracion_experimental.md`):
-  - D-1a — análisis de sensibilidad de los pesos del Score (necesita el harness).
-  - D-1b — revisar si `fraccion_presupuesto=0.7` fijo basta o conviene proyección adaptativa.
-  - D-1d — con MaxFES=5e3 el middleware queda inerte (≈ PSO+DE sin transferencia); se acepta y se discute en el paper (§9).
-  - D-1e — `test_barrera_seguridad.py` CASO 3 falla por una expectativa desactualizada del MMD centrado; no se toca ahora.
-- **Redacción**: Fase 4 como apartado separado; sección de resultados con la
-  discusión obligatoria del setup (§9).
-- **Ablation Study**: descartado por tiempo, queda como trabajo futuro.
+**Reproducibilidad — planificador cooperativo determinista (D-2, RESUELTO):**
+- Se reemplazó el threading pseudo-paralelo por un bucle único (round-robin A/B, sin locks/eventos/sleeps). Misma semilla → resultado **exactamente idéntico** (`tests/test_determinismo_orquestador.py`).
+- De paso se cerraron dos fuentes de no-determinismo independientes del threading: RNG global de `torch` sin sembrar (`middleware/extraccion.py`) y `ShapleySampler.rng` sin semilla en el `fastshap_lib` vendorizado.
+- Efecto colateral: el reparto de FES entre PSO y DE pasa a ser **exactamente 50/50** (antes ~70/30, emergente del scheduling) → `fraccion_presupuesto=0.5` es ahora el valor correcto, no una aproximación (D-1b resuelto).
+
+**Configuración única congelada** (`docs/configuracion_experimental.md`):
+- Tabla completa de parámetros para las 8 configuraciones experimentales (2 dim × 4 MaxFES).
+- Registro de decisiones D-1a (pesos Score, pendiente de validar), D-1b (✅ resuelto), D-1d (comportamiento con MaxFES bajo, aceptado), D-1e (test de barrera rojo, diagnosticado y diferido), D-2 (✅ resuelto), D-3 (costo de FastSHAP, aplicado), D-4 (alcance de competidores, decidido).
+
+**Harness experimental** (`experimentos/`, ver `docs/setup_experimental.md` §11):
+- `semillas.json` (51 semillas fijas) + `generar_semillas.py` + `semillas.py`.
+- `esquema.py`: esquema de datos único (`COLUMNAS_CORRIDA`, `COLUMNAS_PROPUESTO`), `run_id()`, builders de fila.
+- `corrida.py`: `correr_corrida(algoritmo, funcion, dim, max_fes, idx_semilla)` — implementa `"middleware"` (propuesto), `"pso"` y `"de"` (solos, D-4). Nunca lanza excepción: fallos quedan registrados con `estado="fallo"`.
+- `grid.py`: recorre subconjuntos arbitrarios, resumible (salta corridas ya hechas), paralelo por proceso, `--dry-run` con estimación de tiempo calibrada por función.
+- `consolidar.py`: une los Parquet por corrida en `resultados/corridas.parquet` / `corridas_propuesto.parquet`.
+- Smoke tests: `tests/test_experimentos.py`.
+
+### Pendiente ⏳ — en orden recomendado
+
+**Alcance ya fijado (no reabrir sin motivo):** evaluación **solo sobre CEC 2022**
+(12 funciones, D∈{10,20}) — no se amplía a CEC 2014/2017 ni D=50. La Fase 4
+(cierre formal del ciclo, con ΔScore estructurado y auditoría SHAP) **no se
+implementa en código**: se aborda únicamente en la redacción de la tesis.
+Competidores = **solo PSO y DE corriendo solos** (D-4), no un roster externo.
+
+1. **Decidir presupuesto de cómputo antes de lanzar la parrilla.** Con la
+   config actual, `experimentos/grid.py --algoritmo middleware,pso,de --dry-run`
+   estima **~183 h (~7.6 días) en 5 workers** en esta máquina (12 funciones ×
+   2 dim × 4 MaxFES × 51 semillas × 3 algoritmos). El 87-89% es el tier
+   MaxFES=5×10⁶ y ahí domina la función objetivo de opfunu (F7/F8 son las más
+   caras). Palancas disponibles, en orden de impacto: evaluador CEC compilado
+   (podría bajar el total a horas), más núcleos/cloud, nada más — ver
+   `docs/configuracion_experimental.md` D-4.
+2. **D-1a — análisis de sensibilidad de los pesos del Score** (`W_FIR=0.3`,
+   `W_DWD=0.7`): correr 3 configuraciones sobre un subconjunto y verificar que
+   el resultado no depende fuertemente de la elección. Necesita el harness
+   (ya listo) pero no la parrilla completa — se puede hacer con un
+   subconjunto chico primero.
+3. **Lanzar la parrilla** (`experimentos/grid.py`) una vez resueltos 1 y 2, y
+   `experimentos/consolidar.py` para juntar los resultados.
+4. **Construir `analisis/`** (no existe todavía): rankings con empates a
+   10⁻⁸ (N=3: propuesto/PSO/DE, ver nota abajo), Friedman + Shaffer,
+   diagramas de Diferencia Crítica (Nemenyi), Wilcoxon better/equal/worse,
+   desviación de rangos, figuras. El esquema de datos que consume está en
+   `docs/setup_experimental.md` §11.
+5. **Redacción**: Fase 4 como apartado separado (fuera del código); sección
+   de resultados con la discusión obligatoria del setup (§9) — en qué MaxFES
+   destaca el propuesto, cómo varía entre dimensionalidades, qué operadores
+   son beneficiosos/contraproducentes según el presupuesto (D-1d es
+   material directo para esto), robustez frente a PSO/DE solos.
+
+**Diferido, no bloqueante:**
+- D-1e — `tests/test_barrera_seguridad.py` CASO 3 falla por una expectativa
+  desactualizada del filtro MMD centrado (no es un bug del código, ver
+  diagnóstico en `docs/configuracion_experimental.md`). Revisar en algún
+  momento, no urge.
+- Ablation Study: descartado por tiempo, queda como trabajo futuro.
+
+**Nota sobre N=3 en los rankings:** con solo propuesto/PSO/DE, los rankings,
+Friedman y los diagramas CD de Nemenyi son válidos pero menos informativos
+que con un panel amplio de competidores — reconocerlo explícitamente en la
+redacción (ya anticipado en `docs/setup_experimental.md` §3).
 
 ---
 
 ## Log de Ejecución — Formato de Referencia
+
+> El formato del log no cambió con D-2. El ejemplo de abajo se capturó
+> **antes** del planificador determinista — por eso "FES consumidas A / B"
+> muestra 88200/31800 en vez del 50/50 exacto que da el código actual.
 
 ```
 [HH:MM:SS.mmm] ℹ  Iniciando ejecución paralela (MaxFES=120000 evaluaciones agregadas A+B | monitoreo cada 600 FES | ventana Canal A: 12000 FES (10% de MaxFES) | cooldown post-ciclo: 12000 FES)
@@ -348,14 +413,43 @@ tqdm>=4.65
 
 ## Referencia de Archivos Clave para Continuar
 
+### Documentos — leer primero
+
+| Archivo | Qué contiene |
+|---|---|
+| `docs/setup_experimental.md` | Protocolo de evaluación completo (10 secciones, adaptado del PDF de la tesis a CEC 2022) + §11 esquema de datos del harness |
+| `docs/configuracion_experimental.md` | Configuración única congelada (tabla completa) + registro de decisiones D-1a…D-4 con motivo, alternativas y qué queda pendiente |
+| `docs/competidores.md` | Roster candidato de 27 competidores externos — **descartado (D-4)**, se conserva como registro de por qué |
+
+### Código — middleware
+
 | Archivo | Qué hace | Dónde continuar |
 |---|---|---|
-| `problems/cec2022_wrapper.py` | Funciones CEC 2022 (12, D∈{10,20}) + contador FES agregado (`.fes`) + `error()` | — (alcance cerrado) |
-| `middleware/orquestador.py` | Ciclo completo, threading, log, vía MaxFES / clásica | Consumir desde `experimentos/` (harness) |
-| `docs/setup_experimental.md` | Protocolo de evaluación (10 secciones, adaptado a CEC 2022) | Spec del harness y del análisis |
-| `middleware/deteccion.py` | Score S, roles, FIR; warm-up 15% por MaxFES | Calibrar pesos W_FIR / W_DWD |
-| `middleware/extraccion.py` | XGBoost + FastSHAP | Ajustar ventana historial (actual: 50 gen) |
-| `middleware/transferencia.py` | Canal A y B, RMP, EstadoTransferencia | Ajustar RMP inicial si se desea |
-| `middleware/barrera_seguridad.py` | Wasserstein, MMD, umbral | Sin cambios pendientes |
-| `tests/test_orquestador_threading_maxfes.py` | Test de integración vía MaxFES | Base para el harness de 51 corridas |
-| `tests/test_orquestador_threading.py` | Test de integración vía iteraciones (clásica) | — |
+| `middleware/orquestador.py` | Ciclo completo (Fases 1→2→3), planificador cooperativo determinista (D-2), log dual, vía MaxFES / clásica | Fase 4 (cierre formal) queda fuera de código a propósito — no implementar aquí |
+| `middleware/deteccion.py` | Score S, roles dinámicos, FIR; warm-up 15% por MaxFES | D-1a: calibrar pesos `W_FIR`/`W_DWD` por sensibilidad |
+| `middleware/extraccion.py` | XGBoost (subrogado) + FastSHAP; `torch.manual_seed(0)` (D-2) | Sin cambios pendientes conocidos |
+| `middleware/transferencia.py` | Canal A (RMP) y Canal B (élite), `EstadoTransferencia` | Sin cambios pendientes conocidos |
+| `middleware/barrera_seguridad.py` | Wasserstein, MMD, umbral dinámico | D-1e: revisar CASO 3 de `test_barrera_seguridad.py` (no urgente) |
+| `problems/cec2022_wrapper.py` | 12 funciones CEC 2022, D∈{10,20}; `.fes`, `.error()`, checkpoints de convergencia | — (alcance cerrado) |
+| `bioalgorithms/{base,pso,de}.py` | PSO/DE + `fraccion_presupuesto` (0.5 exacto, D-2) | — |
+| `fastshap_lib/` | FastSHAP vendorizado (iancovert/fastshap) + parches (PyTorch ≥2.x, semilla D-2) | No tocar salvo nuevos parches de compatibilidad |
+
+### Código — harness experimental (`experimentos/`)
+
+| Archivo | Qué hace | Dónde continuar |
+|---|---|---|
+| `experimentos/corrida.py` | `correr_corrida(algoritmo, funcion, dim, max_fes, idx_semilla)` — `"middleware"`, `"pso"`, `"de"` | Punto de entrada para una corrida suelta |
+| `experimentos/grid.py` | Parrilla resumible y paralela, `--dry-run` con estimación | **Empezar por acá** para lanzar el experimento — leer §Pendiente arriba primero |
+| `experimentos/consolidar.py` | Une los Parquet por corrida | Correr después de cada lote de `grid.py` |
+| `experimentos/esquema.py` | Esquema único de columnas (§11.2/§11.3) | Los módulos de `analisis/` (a crear) deben importar de acá, no redefinir |
+| `analisis/` | **No existe todavía** | Crear: `rankings.py`, `estadistica.py` (Friedman/Shaffer/Wilcoxon), `cd_nemenyi.py`, `figuras.py` — spec en `setup_experimental.md` §6–§9 |
+
+### Tests
+
+| Archivo | Cubre |
+|---|---|
+| `tests/test_determinismo_orquestador.py` | **Criterio de aceptación de D-2** — correr antes de tocar `orquestador.py` |
+| `tests/test_orquestador_threading_maxfes.py` / `test_orquestador_threading.py` / `test_orquestador_threading2.py` | Integración completa, vía MaxFES / clásica (nombres históricos: ya no usan threading) |
+| `tests/test_experimentos.py` | Smoke del harness (`middleware`/`pso`/`de`) |
+| `tests/test_fase0…test_fase3_transferencia_exitosa.py` | Unitarios por fase |
+| `tests/test_barrera_seguridad.py` | Falla el CASO 3 (D-1e) — pre-existente, no relacionado con cambios recientes |

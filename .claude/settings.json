@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(rm -rf resultados tests/_tmp_resultados)",
+      "Bash(PYTHONIOENCODING=utf-8 python tests/test_experimentos.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python tests/test_orquestador_threading_maxfes.py)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\),f\\) for f in ['experimentos/esquema.py','experimentos/corrida.py','experimentos/grid.py','experimentos/consolidar.py','experimentos/semillas.py','experimentos/generar_semillas.py','tests/test_experimentos.py','middleware/orquestador.py','problems/cec2022_wrapper.py']]; print\\('syntax OK'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 python tests/test_fase0_algoritmos_base.py)",
+      "Bash(PYTHONIOENCODING=utf-8 python tests/test_orquestador_threading.py)",
+      "Bash(echo \"clasico EXIT $?\")",
+      "Read(//tmp/**)",
+      "Bash(cd \"c:/Users/Alexander/Documents/U/Seminario 2/Fase_pruebas\" && rm -f logs/prueba_threading_f11_20260903_*.json logs/prueba_threading_maxfes_20260903_*.json && ls .claude/ 2>/dev/null && echo \"--- experimentos/ ---\" && git status --porcelain experimentos/ | head)",
+      "Bash(python -c \"import opfunu, os; print\\(os.path.dirname\\(opfunu.__file__\\)\\)\")",
+      "Bash(cd \"C:/Users/Alexander/AppData/Local/Programs/Python/Python314/Lib/site-packages/opfunu\" && grep -n \"def evaluate\" cec_based/cec2022.py | head; echo \"---F8 evaluate---\"; sed -n '/class F82022/,/def evaluate/p' cec_based/cec2022.py | head -60)",
+      "Read(//c/Users/Alexander/AppData/Local/Programs/Python/Python314/Lib/site-packages/opfunu/**)",
+      "Bash(cd \"C:/Users/Alexander/AppData/Local/Programs/Python/Python314/Lib/site-packages/opfunu\" && sed -n '285,355p' cec_based/cec2022.py)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Alexander\\Documents\\U\\Seminario 2\\Fase_pruebas\\logs"
+    ]
+  }
+}

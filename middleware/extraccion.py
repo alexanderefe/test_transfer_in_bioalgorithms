@@ -75,12 +75,24 @@ PERCENTIL_PREFILTRO_FITNESS = 0.20  # Opción C acordada: primero se filtra
 N_BACKGROUND_MARGINAL = 30       # tamaño de muestra de población usada como
                                   # "background" del MarginalImputer
 
+# Nº de árboles del modelo subrogado XGBoost. Se probó bajarlo a 50 (decisión
+# D-3) pero el R² del subrogado cayó a 0.65 en el escenario de validación
+# (PSO/F11), por debajo del criterio de aceptación R²>0.7 del documento de
+# tesis. Se mantiene en 100. El costo real —el `predict` dentro de FastSHAP—
+# ya se reduce a la mitad por NUM_SAMPLES_EXPLAINER (8->4).
+N_ESTIMADORES_SUBROGADO = 100
+
 # Hiperparámetros de entrenamiento del explainer FastSHAP. Se mantienen
 # moderados porque la ventana de datos disponible es pequeña (50
 # iteraciones x ~30 individuos = ~1500 muestras), muy por debajo de la
 # escala de los datasets usados en los notebooks originales del paper
 # (census: decenas de miles de filas).
-EPOCHS_EXPLAINER = 50
+# EPOCHS y NUM_SAMPLES reducidos (50->20, 8->4) por la decisión D-3: en las
+# mediciones el resultado del ciclo de transferencia no cambia y el wall-clock
+# del middleware baja. NUM_SAMPLES afecta solo al explainer (no al R² del
+# subrogado), así que es seguro.
+EPOCHS_EXPLAINER = 20
+NUM_SAMPLES_EXPLAINER = 4        # subconjuntos muestreados por ejemplo (train y validación)
 BATCH_SIZE_EXPLAINER = 32
 LR_EXPLAINER = 2e-3
 
@@ -143,8 +155,8 @@ def entrenar_modelo_subrogado(
     # entrenamiento costoso de FastSHAP.
     if np.var(y) < 1e-10:
         modelo = xgb.XGBRegressor(
-            n_estimators=100, max_depth=4,
-            learning_rate=0.1, random_state=0,
+            n_estimators=N_ESTIMADORES_SUBROGADO, max_depth=4,
+            learning_rate=0.1, random_state=0, n_jobs=1,
         )
         modelo.fit(X, y)  # entrenar igualmente para tener un objeto válido
         return modelo, 0.0
@@ -159,10 +171,13 @@ def entrenar_modelo_subrogado(
     idx_train, idx_val = indices[:corte], indices[corte:]
 
     modelo = xgb.XGBRegressor(
-        n_estimators=100,
+        n_estimators=N_ESTIMADORES_SUBROGADO,
         max_depth=4,
         learning_rate=0.1,
         random_state=0,
+        n_jobs=1,  # D-2: el histograma multi-hilo de XGBoost no es determinista
+                   # bit a bit (orden de suma en punto flotante); con n_jobs=1
+                   # el resultado es reproducible dado el mismo random_state.
     )
     modelo.fit(X[idx_train], y[idx_train])
 
@@ -292,6 +307,20 @@ def extraer_conocimiento(
     )
     poblacion_background = X_ventana[idx_background]
 
+    # Semilla fija del RNG global de torch (mismo criterio que los
+    # np.random.default_rng(0)/(1) de arriba: una constante deliberada, no
+    # ligada a la semilla del experimento). Sin esto, la inicialización de
+    # pesos de construir_fastshap() y el muestreo interno de fastshap.train()
+    # dependían del estado global de torch — no sembrado en ningún lado —,
+    # una fuente de no determinismo independiente del threading (D-2).
+    #
+    # NO se fuerza torch.set_num_threads(1): se probó como precaución contra
+    # una eventual no-determinismo de reducciones multi-hilo en BLAS/MKL,
+    # pero no hizo falta — la fuente real de no-determinismo residual era
+    # ShapleySampler.rng sin semilla en fastshap_lib/utils.py (ya parcheado)
+    # — y quitarlo no mostró ninguna mejora de tiempo medible, así que se
+    # deja sin forzar para no restringir el paralelismo interno sin motivo.
+    torch.manual_seed(0)
     fastshap = construir_fastshap(modelo_subrogado, poblacion_background, n_dimensiones)
 
     # Entrenamiento del explainer (única red que realmente se entrena).
@@ -304,10 +333,10 @@ def extraer_conocimiento(
         X_ventana.astype(np.float32),
         X_ventana[idx_val].astype(np.float32),
         batch_size=BATCH_SIZE_EXPLAINER,
-        num_samples=8,
+        num_samples=NUM_SAMPLES_EXPLAINER,
         max_epochs=max_epochs_fastshap,
         lr=LR_EXPLAINER,
-        validation_samples=8,
+        validation_samples=NUM_SAMPLES_EXPLAINER,
         bar=False,
         verbose=False,
     )

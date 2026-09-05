@@ -10,6 +10,7 @@ Se centraliza el acceso a las 12 funciones aquí por dos razones:
    callable f(x) -> float, y una matriz de límites (n_dim, 2).
 """
 
+import math
 import threading
 
 import numpy as np
@@ -19,6 +20,13 @@ from opfunu.cec_based import cec2022
 # debajo de este valor se considera equivalente a haber alcanzado el óptimo
 # (se usa, por ejemplo, para asignar rangos empatados entre algoritmos).
 UMBRAL_ERROR_CERO = 1e-8
+
+# Fracciones de MaxFES en las que se fotografía el mejor valor visto hasta el
+# momento (traza de convergencia). Convención CEC + fracciones tempranas
+# densas para capturar el comportamiento inicial.
+FRACCIONES_CHECKPOINT = (
+    0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+)
 
 # Mapeo de las 12 funciones oficiales del benchmark CEC 2022.
 # F1: unimodal | F2-F4: básicas (multimodales simples)
@@ -121,11 +129,40 @@ class ProblemaCEC2022:
         self._fes = 0
         self._lock_fes = threading.Lock()
 
+        # Traza de convergencia: mejor valor objetivo visto en cualquier
+        # evaluación (best-so-far, convención CEC) y su "foto" en cada
+        # fracción de MaxFES. Se activa con configurar_checkpoints().
+        self._mejor_visto = float("inf")
+        self._umbrales_checkpoint: list[tuple[float, int]] = []  # (fracción, FES)
+        self._idx_checkpoint = 0
+        self._checkpoints: dict[float, float] = {}
+
+    def configurar_checkpoints(self, max_fes: int) -> None:
+        """
+        Prepara la captura de la traza de convergencia para una corrida de
+        `max_fes` evaluaciones. Debe llamarse ANTES de iniciar la corrida
+        (y después de reiniciar_fes() si se reutiliza la instancia).
+        """
+        self._umbrales_checkpoint = [
+            (f, max(1, math.ceil(f * max_fes))) for f in FRACCIONES_CHECKPOINT
+        ]
+        self._idx_checkpoint = 0
+        self._checkpoints = {}
+
     def evaluar(self, x: np.ndarray) -> float:
         """Interfaz uniforme: recibe un vector y retorna un escalar."""
         valor = float(self._funcion.evaluate(x))
         with self._lock_fes:
             self._fes += 1
+            if valor < self._mejor_visto:
+                self._mejor_visto = valor
+            # Registrar todos los checkpoints cuyo umbral de FES ya se alcanzó
+            # (un solo eval puede cruzar varios si MaxFES es muy bajo).
+            while (self._idx_checkpoint < len(self._umbrales_checkpoint)
+                   and self._fes >= self._umbrales_checkpoint[self._idx_checkpoint][1]):
+                frac = self._umbrales_checkpoint[self._idx_checkpoint][0]
+                self._checkpoints[frac] = self._mejor_visto
+                self._idx_checkpoint += 1
         return valor
 
     @property
@@ -137,12 +174,34 @@ class ProblemaCEC2022:
             return self._fes
 
     def reiniciar_fes(self) -> None:
-        """Pone el contador de FES a cero. Necesario para reutilizar la
-        misma instancia de problema en corridas independientes (el setup
-        experimental exige que cada valor de MaxFES sea una corrida nueva
-        desde cero, no una continuación)."""
+        """Pone el contador de FES a cero y descarta la traza de convergencia.
+        Necesario para reutilizar la misma instancia de problema en corridas
+        independientes (el setup experimental exige que cada valor de MaxFES
+        sea una corrida nueva desde cero, no una continuación).
+        Llamar a configurar_checkpoints() de nuevo tras reiniciar."""
         with self._lock_fes:
             self._fes = 0
+            self._mejor_visto = float("inf")
+            self._idx_checkpoint = 0
+            self._checkpoints = {}
+
+    def error_checkpoints(self) -> list[float]:
+        """
+        Traza de convergencia como error respecto al óptimo (`f − f(x*)`),
+        una entrada por cada fracción de FRACCIONES_CHECKPOINT. Para una
+        fracción que la corrida no alcanzó se usa el mejor valor visto hasta
+        ese punto (con ~MaxFES consumidas la fracción 1.0 siempre se alcanza).
+        """
+        with self._lock_fes:
+            checkpoints = dict(self._checkpoints)
+            mejor_actual = self._mejor_visto
+        salida = []
+        ultimo = mejor_actual
+        for f in FRACCIONES_CHECKPOINT:
+            if f in checkpoints:
+                ultimo = checkpoints[f]
+            salida.append(self.error(ultimo))
+        return salida
 
     def error(self, valor_objetivo, aplicar_umbral: bool = False):
         """

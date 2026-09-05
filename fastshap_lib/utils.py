@@ -170,7 +170,14 @@ class ShapleySampler:
         self.tril = np.tril(
             np.ones((num_players - 1, num_players), dtype=np.float32), k=0
         )
-        self.rng = np.random.default_rng()
+        # PARCHE (D-2, docs/configuracion_experimental.md — proyecto que
+        # vendoriza este archivo): `np.random.default_rng()` sin argumento
+        # arranca desde entropía del SO, una fuente de no-determinismo
+        # ajena al threading que rompía la reproducibilidad de las corridas
+        # del middleware (el muestreo de coaliciones de Shapley usa este
+        # `self.rng` en cada llamada a `sample()`). Semilla fija, mismo
+        # criterio que el resto de las constantes de RNG del proyecto.
+        self.rng = np.random.default_rng(0)
 
     def sample(self, batch_size, paired_sampling):
         '''

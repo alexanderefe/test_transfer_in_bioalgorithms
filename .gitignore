@@ -31,11 +31,20 @@ htmlcov/
 Thumbs.db
 
 # ── Artefactos de este proyecto ──────────────────────────────────────
-# Logs de corridas de PRUEBA (throwaway). Los resultados crudos del
-# protocolo experimental definitivo deberían guardarse en otra carpeta
-# (p. ej. resultados/) y SÍ versionarse por reproducibilidad.
+# Logs de corridas de PRUEBA (throwaway).
 logs/smoke_*.json
 logs/_run_*.txt
+logs/prueba_determinismo_*.json
+
+# Harness experimental: los Parquet POR CORRIDA, los logs JSON del middleware
+# y los tracebacks de fallos son voluminosos y regenerables. Los CONSOLIDADOS
+# (resultados/*.parquet) NO se ignoran: van en el material suplementario /
+# reproducibilidad (setup §10).
+resultados/corridas/
+resultados/corridas_propuesto/
+resultados/logs_middleware/
+resultados/fallos/
+tests/_tmp_resultados/
 
 # Archivo basura de una redirección de shell fallida (pip ... 'tqdm>=4.65')
 /4.65
