@@ -113,20 +113,32 @@ amplía a CEC 2014/2017 ni D=50. Protocolo completo en
 Formato: **decisión tomada ahora** (para no bloquear el setup de pruebas) +
 **qué queda pendiente de revisar a fondo**.
 
-### D-1a · Calibración de los pesos del Score (`W_FIR` / `W_DWD`)
+### D-1a · Calibración de los pesos del Score (`W_FIR` / `W_DWD`) — RESUELTO
 
-- **Estado previo:** 0.3 / 0.7, marcados "empíricos provisionales".
-- **Decisión (2026-09-01):** se conservan **0.3 / 0.7** para el setup. La
-  validación será un **análisis de sensibilidad**, no un grid-search de
-  optimización: correr 3 configuraciones — `0.2/0.8`, `0.3/0.7`, `0.5/0.5` —
-  sobre un subconjunto (12 funciones CEC 2022, D=10, MaxFES = 5×10⁴,
-  ~10 semillas) y reportar si el error final del sistema es robusto a la
-  elección. Si lo es, 0.3/0.7 queda justificado; si no, se revisa.
-- **Bloqueado por:** el harness experimental (punto 4 del plan). No se
-  puede correr hasta tenerlo.
-- **Pendiente:** ejecutar el análisis de sensibilidad y añadir sus
-  resultados a este documento y al paper (sección de resultados / material
-  suplementario).
+- **Estado previo (2026-09-01):** 0.3 / 0.7, marcados "empíricos
+  provisionales", con un análisis de sensibilidad empírico planeado (3
+  configuraciones — `0.2/0.8`, `0.3/0.7`, `0.5/0.5` — sobre un subconjunto
+  de 12 funciones CEC 2022, D=10, MaxFES=5×10⁴, ~10 semillas) para
+  confirmar que el error final del sistema no dependiera fuertemente de
+  la elección.
+- **Decisión final (2026-09-04): se conservan `W_FIR=0.3` / `W_DWD=0.7`
+  por justificación conceptual, sin ejecutar el barrido empírico.**
+  Razón: la diversidad poblacional (DWD) es una señal más informativa de
+  estancamiento real que la tasa de mejora de fitness (FIR) — un
+  algoritmo puede dejar de mejorar su fitness momentáneamente sin haber
+  perdido diversidad (falso positivo de estancamiento si FIR pesara más),
+  mientras que la pérdida de diversidad poblacional es un indicador más
+  directo y difícil de revertir de que el algoritmo quedó atrapado en un
+  óptimo local. Ponderar DWD por encima de FIR (0.7 vs 0.3) refleja esa
+  jerarquía de evidencia.
+- Esto reemplaza el plan de validación empírica: no se implementó el
+  parámetro `peso_fir`/`peso_dwd` en `Orquestador.__init__` (los tres
+  llamados a `calcular_score()` en `middleware/orquestador.py` siguen
+  usando los defaults del módulo, `middleware/deteccion.py:68-69`) ni se
+  corrió el subconjunto de sensibilidad. Si en la redacción hace falta
+  robustecer este punto, la justificación a citar es la de arriba
+  (jerarquía conceptual DWD > FIR), no un resultado experimental.
+- Ya no bloquea el lanzamiento de la parrilla — ver README "Pendiente".
 
 ### D-1b · Cuota de presupuesto de PSO (`fraccion_presupuesto`) — RESUELTO
 
@@ -214,9 +226,11 @@ Formato: **decisión tomada ahora** (para no bloquear el setup de pruebas) +
   el middleware es <10 %). D-3 acelera las corridas cortas y el ciclo de
   desarrollo/sensibilidad, pero **no es la palanca de la parrilla** — esa es
   el evaluador CEC compilado.
-- **Pendiente:** confirmar en el análisis de sensibilidad (D-1a) que `20`
-  epochs no degrada la calidad del middleware en otras funciones; queda la
-  opción de bajar más si el R²/atribución lo permiten.
+- **Nota:** D-1a (pesos del Score) se cerró por justificación conceptual,
+  sin barrido empírico — no hay una corrida de sensibilidad donde
+  confirmar que `20` epochs no degrada la calidad del middleware en otras
+  funciones. Queda la opción de bajar más si, al revisar los resultados
+  de la parrilla completa, el R²/atribución de Fase 2 lo permiten.
 
 ### D-2 · Reproducibilidad del algoritmo propuesto — RESUELTO
 
@@ -326,6 +340,131 @@ Formato: **decisión tomada ahora** (para no bloquear el setup de pruebas) +
   aceptable o si hace falta más cómputo antes de lanzar. D-2 ya está
   resuelto — la parrilla se puede lanzar en cuanto se decida esto y el
   sourcing de §3 quede cerrado (D-4 ya no bloquea el lanzamiento).
+
+### D-5 · Evaluador CEC2022 compilado (Numba) — RESUELTO
+
+- **Motivación:** D-4 dejó la parrilla en ~183 h con 5 workers (~7.6 días).
+  Del propio estimador calibrado, la función objetivo de opfunu (Python
+  interpretado + overhead de numpy por llamada) era ~79% del tiempo total.
+  Se evaluó envolver el código C oficial de CEC2022 vía `ctypes`, pero esta
+  máquina no tiene compilador C/C++ instalado (`cl.exe`, `gcc`, `clang`
+  ausentes) — instalar un toolchain nativo (MSVC Build Tools o MinGW) es
+  fricción adicional evitable.
+- **Decisión (2026-09-04):** reemplazar el evaluador por un backend
+  compilado con **Numba** (`@njit`), que no requiere toolchain nativo
+  (`llvmlite` trae wheel precompilado; confirmado `numba==0.67.0` +
+  `llvmlite==0.49.0` con wheel `cp314-win_amd64`). El backend nuevo
+  (`problems/cec2022_numba.py`) **no reimplementa la especificación CEC
+  desde cero**: reutiliza los mismos arrays de shift/rotación/shuffle que
+  `opfunu` ya carga desde `data_2022/`, portando línea a línea las 12
+  funciones de `opfunu/cec_based/cec2022.py` y las funciones elementales
+  de `opfunu/utils/operator.py` (incluyendo comportamientos no triviales
+  como `rounder()` en F4, que no se "corrige", se reproduce tal cual).
+  `ProblemaCEC2022` gana `backend: str = "numba"` (default) | `"opfunu"`
+  (referencia, usado solo por el test de paridad); el resto del wrapper
+  (contador de FES, checkpoints, `error()`) no cambia.
+- **Validación de paridad** (`tests/test_cec2022_numba_paridad.py`, gate de
+  aceptación): las 12 funciones × D∈{10,20}, evaluadas en el óptimo, 200
+  puntos aleatorios y las esquinas del dominio, contra tolerancia
+  `abs(diff) ≤ max(1e-6, 1e-9·|valor|)`. Resultado: **error relativo
+  máximo entre 1e-14 y 1e-16 en las 24 combinaciones** — ruido de punto
+  flotante por orden de suma distinto (loop secuencial vs reducción de
+  numpy), no discrepancia de fórmula. `tests/test_determinismo_orquestador.py`
+  (criterio de aceptación de D-2) sigue dando igualdad exacta entre
+  corridas bajo el nuevo backend — la evaluación es una función pura sin
+  estado ni RNG, cambiar de backend no reabre D-2.
+- **Speedup medido** (µs/eval, backend numba vs opfunu, esta máquina, post
+  warm-up JIT): entre **6× (F1, función barata, dominada por overhead de
+  llamada) y 220× (F8, la más cara bajo opfunu)**. Las funciones híbridas
+  y de composición (F7-F12, antes 85-666 µs/eval) son las que más ganan
+  (20×-220×), justo las que dominaban el tier MaxFES=5×10⁶.
+- **Efecto medido en la parrilla completa (primera pasada, solo evaluador):**
+  con `_US_POR_EVAL` recalibrado con los valores medidos del evaluador
+  Numba, pero las demás constantes del estimador (`_OVERHEAD_US_POR_EVAL`,
+  costo de Fase 2) sin tocar todavía: **912 h → 206.6 h secuencial, ~183 h
+  → ~41.3 h con 5 workers (~1.72 días)**. Este número resultó optimista —
+  ver el piloto real abajo.
+
+- **Corrida piloto real (143 corridas, 2 rondas) — recalibración completa
+  del estimador (2026-09-04).** Antes de lanzar la parrilla completa se
+  corrió un piloto (108 corridas amplias en tiers baratos + 32 puntuales
+  en tiers caros para caracterizar mejor `middleware`) y se comparó tiempo
+  real vs. estimado de `_estimacion_seg()`. Dos hallazgos, independientes
+  de D-5 pero recién visibles porque el evaluador dejó de ser el costo
+  dominante:
+  1. **`_OVERHEAD_US_POR_EVAL` (pso/de) estaba desactualizado y
+     sobreestimaba el costo real.** Regresión lineal sobre 37+37 corridas
+     reales (R²=1.000 ambos): PSO 11.0→**5.34 µs/eval**, DE 77.0→
+     **48.33 µs/eval**.
+  2. **El costo de Fase 2 (FastSHAP+XGBoost) estaba subestimado ~5×**, y
+     había un costo fijo de arranque por corrida (~construcción de
+     XGBoost/FastSHAP/torch) invisible mientras opfunu dominaba el tiempo
+     total. Regresión sobre 69 corridas reales de middleware, incluyendo
+     los tiers 500 000 y 5 000 000 (R²=0.893): antes se asumía 2.5 s por
+     activación de Fase 2, medido **~12.56 s/activación**. El conteo de
+     activaciones **se estabiliza por función** (rango 3-9) una vez
+     MaxFES ≥ 50 000 en vez de seguir creciendo — el tope de 9 de
+     `min(9, MaxFES/25_000)` sigue siendo una aproximación razonable para
+     maxfes ≥ 225 000 (validado: error promedio ~8% en esos tiers), pero
+     subestima en el tier más barato (MaxFES=5 000, donde el conteo real
+     es un valor discreto pequeño específico de cada función, no
+     proporcional a MaxFES) — ese residuo agrega ~9 h secuenciales
+     (~1.8 h con 5 workers) no capturadas por el modelo, pequeño frente al
+     total.
+  3. Las tres constantes se corrigieron en `experimentos/grid.py`
+     (`_OVERHEAD_US_POR_EVAL`, y la fórmula de `_estimacion_seg` para
+     `"middleware"`).
+
+- **Efecto medido en la parrilla completa (final, validado con el
+  piloto):**
+
+  | | secuencial | 5 workers |
+  |---|---|---|
+  | middleware | 138.3 h | 27.7 h |
+  | pso solo | 15.4 h | 3.1 h |
+  | de solo | 96.5 h | 19.3 h |
+  | **Total** | **250.3 h** | **~50.1 h (~2.09 días)**, ~52 h (~2.15 días) con el residuo conocido del tier barato |
+
+  Comparado con el punto de partida pre-D5 (~183 h / ~7.6 días), sigue
+  siendo una reducción de **~3.5×**, aunque menor que la primera pasada
+  optimista (~41.3 h) porque esta corrigió, además del evaluador, dos
+  costos de Python que estaban mal calibrados desde antes de D-5.
+
+- **No llega a la meta orientativa de 1.5 días (36 h)** planteada al
+  iniciar esta decisión. La razón, anticipada antes de medir: el
+  evaluador compilado no toca el overhead de Python del *bucle* de DE
+  (`bioalgorithms/de.py::un_paso()`, for-loop por individuo con
+  `rng.choice()` y slicing) — con el objetivo casi gratis, ese overhead
+  pasa a ser **el cuello de botella de "de solo"** y, junto con el costo
+  real de Fase 2 en middleware, de toda la parrilla.
+- **Decidido (2026-09-04): NO vectorizar el loop de DE.** Se evaluó como
+  próxima palanca para bajar de 1.72 a ~1.5 días, pero se descarta:
+  - Vectorizar `DE.un_paso()` reordena las llamadas al RNG (`rng.choice()`
+    por individuo → una operación vectorizada de una sola vez), el mismo
+    tipo de riesgo de reproducibilidad que motivó D-2. Con la misma
+    semilla, el resultado dejaría de coincidir con el ya calibrado — no
+    por un bug, sino porque el stream de números pseudoaleatorios se
+    consumiría en un orden distinto.
+  - Riesgo más serio que la sola reproducibilidad: `rng.choice(candidatos,
+    size=3, replace=False)` garantiza 3 vecinos distintos entre sí y
+    distintos de `i`, sin sesgo. Una versión vectorizada de "elegir 3
+    vecinos excluyendo el propio índice, para los `n` individuos a la
+    vez" es fácil de escribir con un sesgo sutil (sobre-representar
+    ciertos vecinos, permitir duplicados, no excluir `i` en un caso
+    límite) que **cambiaría la distribución real de la mutación
+    DE/rand/1** — justo la propiedad que Fase 0 validó como la que hace
+    que DE se estanque de forma confiable en las funciones multimodales
+    del CEC2022 (`tests/test_fase0_algoritmos_base.py`). Esa propiedad es
+    la premisa completa del experimento (el middleware necesita un
+    objetivo que realmente se estanque). A diferencia de D-5 (función
+    pura, paridad numérica verificable con puntos aleatorios), esto no
+    admite un test de "mismo input → mismo output": la validación pasaría
+    a ser un juicio estadístico/de comportamiento sobre varias semillas,
+    no una verificación directa.
+  - Se acepta el status quo post-D5: **~41.3 h (~1.72 días) con 5
+    workers**, ~5 h por encima de la meta orientativa de 1.5 días. Ya no
+    bloquea el lanzamiento de la parrilla — ver README "Pendiente".
+- Nueva dependencia: `numba>=0.67` en `requirements.txt`.
 
 ---
 

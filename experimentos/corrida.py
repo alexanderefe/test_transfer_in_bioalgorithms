@@ -42,8 +42,9 @@ _PSO_KW = dict(w_max=0.9, w_min=0.4, c1=2.0, c2=2.0)
 _DE_KW = dict(F=0.2, CR=0.3)
 
 
-def _version() -> str:
-    """Marca de versión para reproducibilidad (§10): commit corto de git."""
+def _version(backend: str = "numba") -> str:
+    """Marca de versión para reproducibilidad (§10): commit corto de git +
+    backend del evaluador CEC2022 (D-5, docs/configuracion_experimental.md)."""
     try:
         h = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -52,7 +53,7 @@ def _version() -> str:
         commit = h.stdout.strip() or "sin-git"
     except Exception:
         commit = "sin-git"
-    return f"git:{commit}"
+    return f"git:{commit}|eval:{backend}"
 
 
 def _correr_middleware(problema: ProblemaCEC2022, dim: int, max_fes: int,

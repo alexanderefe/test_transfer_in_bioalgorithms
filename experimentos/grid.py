@@ -49,15 +49,25 @@ ALGORITMOS_VALIDOS = ("middleware", "pso", "de")
 # INDEPENDIENTE de la función (no es costo del objetivo, es el bucle del
 # algoritmo). PSO está vectorizado con numpy (bajo); DE tiene un for-loop
 # por individuo con rng.choice() y slicing (alto). No incluye FastSHAP.
-_OVERHEAD_US_POR_EVAL = {"pso": 11.0, "de": 77.0}
+# Recalibrado post-D5 con regresión lineal sobre 37+37 corridas piloto
+# reales (R²=1.000 ambos): valores previos (11.0 / 77.0) estaban obsoletos
+# y sobreestimaban el costo real — quedan comentados como referencia.
+# anterior: {"pso": 11.0, "de": 77.0}
+_OVERHEAD_US_POR_EVAL = {"pso": 5.34, "de": 48.33}
 
-# µs/eval de la función objetivo de opfunu, medido en esta máquina, como
-# (D=10, D=20). Casi todas son independientes de la dimensión; F7 y F8
-# (híbridas) sí escalan. Para el dry-run del estimador.
+# µs/eval del evaluador CEC2022, medido en esta máquina, como (D=10, D=20).
+# Backend "numba" (D-5, docs/configuracion_experimental.md): compilado con
+# Numba, reemplazó al backend "opfunu" (interpretado) como default de
+# ProblemaCEC2022. Speedup medido 6x (F1, función barata, dominada por
+# overhead de llamada) a 220x (F8, la más cara bajo opfunu). Valores
+# opfunu previos quedan comentados como referencia histórica.
+# opfunu (pre-D5): 1:(9.7,9.8) 2:(15.4,15.2) 3:(34.1,34.6) 4:(56.1,57.6)
+#   5:(21.7,21.4) 6:(25.7,25.6) 7:(267.4,454.6) 8:(358.8,629.0)
+#   9:(85.0,87.1) 10:(91.3,92.6) 11:(159.3,159.6) 12:(172.8,172.4)
 _US_POR_EVAL = {
-    1: (9.7, 9.8),     2: (15.4, 15.2),  3: (34.1, 34.6),  4: (56.1, 57.6),
-    5: (21.7, 21.4),   6: (25.7, 25.6),  7: (267.4, 454.6), 8: (358.8, 629.0),
-    9: (85.0, 87.1),  10: (91.3, 92.6), 11: (159.3, 159.6), 12: (172.8, 172.4),
+    1: (1.64, 1.69),   2: (1.43, 1.65),  3: (1.53, 1.88),  4: (1.65, 1.95),
+    5: (2.06, 2.03),   6: (2.20, 2.04),  7: (2.27, 2.89),  8: (2.49, 3.03),
+    9: (3.30, 4.76),  10: (3.12, 4.33), 11: (3.97, 5.76), 12: (4.07, 6.14),
 }
 
 
@@ -76,26 +86,37 @@ def _parse_lista(texto: str, tipo=int) -> list:
 
 def _estimacion_seg(algoritmo: str, funcion: int, dim: int, max_fes: int) -> float:
     """
-    Tiempo aprox. de una corrida, calibrado con mediciones en esta máquina
-    (post-D3: EPOCHS=20, num_samples=4):
+    Tiempo aprox. de una corrida. Recalibrado post-D5 (2026-09-04) con
+    regresión lineal sobre 111 corridas piloto reales
+    (docs/configuracion_experimental.md, D-5 / piloto):
 
-      "middleware": t ≈ t_objetivo + t_middleware
-        t_middleware ≈ 2.5 s · nº activaciones Fase 2  +  2.3e-4 s · nº generaciones-par
-        nº activaciones ≈ min(9, MaxFES / 25 000)  (limitado por el cooldown del 10 %)
-        nº generaciones-par ≈ MaxFES / (pop_A + pop_B) = MaxFES / 60
+      "middleware": t ≈ intercepto_fijo + seg_por_activacion · nº activaciones
+                       + us_eval_combinado · MaxFES  (ajuste: R²=0.893, n=69,
+                       12 funciones × 2 dims cubiertas en maxfes ≥ 500 000)
+        seg_por_activacion ≈ 12.56 s (vs. 2.5 s asumido antes — la Fase 2
+          real es ~5x más cara de lo que se creía).
+        us_eval_combinado ≈ 30.31 µs/eval (overhead interno de PSO+DE
+          corriendo bajo el middleware, consistente con _OVERHEAD_US_POR_EVAL).
+        intercepto_fijo ≈ -2.42 s (artefacto del ajuste por mínimos
+          cuadrados con muestra finita; magnitud pequeña, no se interpreta
+          como costo negativo real).
+
+        nº activaciones ≈ min(9, MaxFES / 25 000): validado con el piloto
+        ampliado en maxfes=500 000 y 5 000 000 — el conteo real SE ESTABILIZA
+        en un valor propio de cada función (rango 3-9, la mayoría 5-9) en
+        vez de seguir creciendo con MaxFES; el tope de 9 de esta fórmula
+        aproxima razonablemente ese comportamiento para maxfes ≥ 225 000.
 
       "pso" / "de" (sin middleware, presupuesto completo para sí solos):
-        t ≈ t_objetivo + overhead_us_por_eval · MaxFES
-        (overhead constante por eval, independiente de la función — ver
-        _OVERHEAD_US_POR_EVAL; DE es ~7x más caro que PSO por su for-loop
-        de por-individuo con rng.choice()).
+        t ≈ t_objetivo + overhead_us_por_eval · MaxFES — ajuste R²=1.000,
+        n=37 cada uno; ver _OVERHEAD_US_POR_EVAL (recalibrado, ya no es la
+        estimación pre-D5).
     """
     us = _US_POR_EVAL.get(funcion, (150.0, 150.0))[0 if dim == 10 else 1]
     t_obj = us * 1e-6 * max_fes
     if algoritmo == "middleware":
         n_act = min(9, max_fes / 25_000)
-        n_gen = max_fes / 60.0
-        return t_obj + 2.5 * n_act + 2.3e-4 * n_gen
+        return -2.4235 + 12.5617 * n_act + 30.31e-6 * max_fes
     overhead_us = _OVERHEAD_US_POR_EVAL.get(algoritmo, 0.0)
     return t_obj + overhead_us * 1e-6 * max_fes
 

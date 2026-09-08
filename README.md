@@ -30,8 +30,9 @@ Fase 3/
 │   └── de.py                # DE/rand/1/bin (F=0.2, CR=0.3 por defecto)
 │
 ├── problems/
-│   └── cec2022_wrapper.py   # Wrapper opfunu: 12 funciones CEC 2022, D∈{10,20};
-│                            #   contador FES agregado (.fes) + óptimo conocido + error()
+│   ├── cec2022_wrapper.py   # ProblemaCEC2022: 12 funciones CEC 2022, D∈{10,20};
+│   │                        #   contador FES agregado (.fes) + óptimo conocido + error()
+│   └── cec2022_numba.py     # Backend compilado (Numba, D-5) — default; opfunu = referencia
 │
 ├── middleware/
 │   ├── deteccion.py         # Fase 1: Score S = 0.3·FIR + 0.7·DWD; warm-up 15% por MaxFES
@@ -258,6 +259,8 @@ Algoritmo B (objetivo) ─┘   Round-robin: una generación de A, una de B, alt
 
 8. **R²=0 bloqueaba transferencias válidas**: varianza de fitness ≈ 0 producía R²=0.0 exacto por la guarda `ss_tot > 0`. Solución: bloquear solo si R² < 0 estrictamente.
 
+9. **`FastSHAP.train()` crasheaba con `AttributeError: 'NoneType' object has no attribute 'parameters'`** (`fastshap_lib/fastshap.py:440`), detectado en la parrilla completa: 17/14 688 corridas fallaron, todas en F8 (rango dinámico muy grande — valores ~10⁶). Causa: `best_model` arranca en `None` y solo se asigna si la pérdida de validación mejora en alguna época; si sale `NaN` en todas (posible con F8), la comparación `NaN < best_loss` es siempre `False` y `best_model` nunca se asigna. Solución: si `best_model is None` al terminar el entrenamiento, conservar el `explainer` tal como quedó en la última época en vez de copiarle pesos de un "mejor modelo" que nunca existió — mismo criterio que los otros parches de compatibilidad de ese archivo vendorizado (no altera la lógica del paper). Las 17 corridas se reintentaron tras el parche: las 14 688 corridas de la parrilla completa terminaron en `estado="ok"`.
+
 ---
 
 ## Escenarios Validados
@@ -321,27 +324,51 @@ Algoritmo B (objetivo) ─┘   Round-robin: una generación de A, una de B, alt
 implementa en código**: se aborda únicamente en la redacción de la tesis.
 Competidores = **solo PSO y DE corriendo solos** (D-4), no un roster externo.
 
-1. **Decidir presupuesto de cómputo antes de lanzar la parrilla.** Con la
-   config actual, `experimentos/grid.py --algoritmo middleware,pso,de --dry-run`
-   estima **~183 h (~7.6 días) en 5 workers** en esta máquina (12 funciones ×
-   2 dim × 4 MaxFES × 51 semillas × 3 algoritmos). El 87-89% es el tier
-   MaxFES=5×10⁶ y ahí domina la función objetivo de opfunu (F7/F8 son las más
-   caras). Palancas disponibles, en orden de impacto: evaluador CEC compilado
-   (podría bajar el total a horas), más núcleos/cloud, nada más — ver
-   `docs/configuracion_experimental.md` D-4.
-2. **D-1a — análisis de sensibilidad de los pesos del Score** (`W_FIR=0.3`,
-   `W_DWD=0.7`): correr 3 configuraciones sobre un subconjunto y verificar que
-   el resultado no depende fuertemente de la elección. Necesita el harness
-   (ya listo) pero no la parrilla completa — se puede hacer con un
-   subconjunto chico primero.
-3. **Lanzar la parrilla** (`experimentos/grid.py`) una vez resueltos 1 y 2, y
-   `experimentos/consolidar.py` para juntar los resultados.
-4. **Construir `analisis/`** (no existe todavía): rankings con empates a
-   10⁻⁸ (N=3: propuesto/PSO/DE, ver nota abajo), Friedman + Shaffer,
-   diagramas de Diferencia Crítica (Nemenyi), Wilcoxon better/equal/worse,
-   desviación de rangos, figuras. El esquema de datos que consume está en
-   `docs/setup_experimental.md` §11.
-5. **Redacción**: Fase 4 como apartado separado (fuera del código); sección
+**Presupuesto de cómputo — decidido (2026-09-04):** se acepta el status quo
+post-D5, **~50-52 h (~2.1-2.2 días) en 5 workers** (`experimentos/grid.py
+--dry-run`), bajando de los ~183 h (~7.6 días) previos gracias al evaluador
+CEC2022 compilado con Numba (D-5, sin tocar la especificación, paridad
+numérica validada). Este número está **validado con una corrida piloto real
+de 143 corridas** (no es solo teórico): el piloto reveló que, además del
+evaluador, dos costos de Python estaban mal calibrados desde antes de D-5 y
+recién se hicieron visibles al dejar de estar tapados por el costo de
+opfunu — el overhead del bucle de PSO/DE (antes sobreestimado) y sobre todo
+el costo real de Fase 2 del middleware (FastSHAP+XGBoost, antes subestimado
+~5×). Con las tres constantes recalibradas contra datos reales, el cuello
+de botella restante es el `for`-loop de `DE.un_paso()` — **se decide NO
+vectorizarlo**: el riesgo de reproducibilidad (reordena las llamadas al
+RNG, mismo tipo de problema que D-2, y podría alterar sutilmente la
+distribución de la mutación DE/rand/1 que Fase 0 validó como generadora de
+estancamiento confiable) pesa más que ganar unas horas adicionales. Ya no
+bloquea el lanzamiento de la parrilla — ver `docs/configuracion_experimental.md`
+D-5 para el detalle de la recalibración.
+
+**D-1a — pesos del Score — decidido (2026-09-04):** se conservan
+`W_FIR=0.3` / `W_DWD=0.7` por justificación conceptual (la diversidad
+poblacional, DWD, es una señal más informativa de estancamiento real que
+la tasa de mejora de fitness, FIR — un algoritmo puede dejar de mejorar
+momentáneamente sin haber perdido diversidad), **sin ejecutar el barrido
+empírico de sensibilidad** que estaba planeado. Ya no bloquea el
+lanzamiento — ver `docs/configuracion_experimental.md` D-1a.
+
+**Parrilla completa — lanzada y terminada (2026-09-08).** `experimentos/grid.py
+--algoritmo middleware,pso,de` corrió las 14 688 corridas en **71.30 h**
+(por encima de la estimación de 50-52 h — el estimador de `grid.py` sigue
+siendo aproximado, no una cota dura). Terminó con 14 528 `ok` / 17 `fallo`;
+los 17 fallos eran el mismo bug (`fastshap_lib/fastshap.py`, `best_model`
+quedaba en `None` cuando la pérdida de validación salía `NaN` en todas las
+épocas — específico de F8 por su rango dinámico grande, ver "Bugs Resueltos
+Relevantes" #9). Con el parche aplicado se reintentaron las 17 y
+`resultados/corridas.parquet` / `corridas_propuesto.parquet` quedaron con
+**14 688 / 4 896 filas, 100% `estado="ok"`**.
+
+1. **Construir `analisis/`** (no existe todavía — siguiente paso): rankings
+   con empates a 10⁻⁸ (N=3: propuesto/PSO/DE, ver nota abajo), Friedman +
+   Shaffer, diagramas de Diferencia Crítica (Nemenyi), Wilcoxon
+   better/equal/worse, desviación de rangos, figuras. El esquema de datos
+   que consume está en `docs/setup_experimental.md` §11 y ya está
+   disponible en `resultados/corridas.parquet` / `corridas_propuesto.parquet`.
+2. **Redacción**: Fase 4 como apartado separado (fuera del código); sección
    de resultados con la discusión obligatoria del setup (§9) — en qué MaxFES
    destaca el propuesto, cómo varía entre dimensionalidades, qué operadores
    son beneficiosos/contraproducentes según el presupuesto (D-1d es
@@ -401,6 +428,7 @@ torch>=2.0
 xgboost>=2.0
 scikit-learn>=1.3
 tqdm>=4.65
+numba>=0.67          # evaluador CEC2022 compilado (D-5); wheel cp314, sin toolchain C
 # fastshap: incluido como código fuente en fastshap_lib/ (no instalar por pip)
 # POT: descartado (incompatible con Python 3.14 en Windows) → Wasserstein vía scipy.linprog
 ```
@@ -418,7 +446,7 @@ tqdm>=4.65
 | Archivo | Qué contiene |
 |---|---|
 | `docs/setup_experimental.md` | Protocolo de evaluación completo (10 secciones, adaptado del PDF de la tesis a CEC 2022) + §11 esquema de datos del harness |
-| `docs/configuracion_experimental.md` | Configuración única congelada (tabla completa) + registro de decisiones D-1a…D-4 con motivo, alternativas y qué queda pendiente |
+| `docs/configuracion_experimental.md` | Configuración única congelada (tabla completa) + registro de decisiones D-1a…D-5 con motivo, alternativas y qué queda pendiente |
 | `docs/competidores.md` | Roster candidato de 27 competidores externos — **descartado (D-4)**, se conserva como registro de por qué |
 
 ### Código — middleware
@@ -430,7 +458,8 @@ tqdm>=4.65
 | `middleware/extraccion.py` | XGBoost (subrogado) + FastSHAP; `torch.manual_seed(0)` (D-2) | Sin cambios pendientes conocidos |
 | `middleware/transferencia.py` | Canal A (RMP) y Canal B (élite), `EstadoTransferencia` | Sin cambios pendientes conocidos |
 | `middleware/barrera_seguridad.py` | Wasserstein, MMD, umbral dinámico | D-1e: revisar CASO 3 de `test_barrera_seguridad.py` (no urgente) |
-| `problems/cec2022_wrapper.py` | 12 funciones CEC 2022, D∈{10,20}; `.fes`, `.error()`, checkpoints de convergencia | — (alcance cerrado) |
+| `problems/cec2022_wrapper.py` | 12 funciones CEC 2022, D∈{10,20}; `.fes`, `.error()`, checkpoints de convergencia; `backend="numba"` (default, D-5) / `"opfunu"` (referencia) | — (alcance cerrado) |
+| `problems/cec2022_numba.py` | Backend compilado (D-5): puerto @njit de las 12 funciones, reutiliza datos de opfunu | Sin cambios pendientes conocidos — ver test de paridad antes de tocar |
 | `bioalgorithms/{base,pso,de}.py` | PSO/DE + `fraccion_presupuesto` (0.5 exacto, D-2) | — |
 | `fastshap_lib/` | FastSHAP vendorizado (iancovert/fastshap) + parches (PyTorch ≥2.x, semilla D-2) | No tocar salvo nuevos parches de compatibilidad |
 
@@ -449,6 +478,7 @@ tqdm>=4.65
 | Archivo | Cubre |
 |---|---|
 | `tests/test_determinismo_orquestador.py` | **Criterio de aceptación de D-2** — correr antes de tocar `orquestador.py` |
+| `tests/test_cec2022_numba_paridad.py` | **Criterio de aceptación de D-5** — paridad numérica numba vs opfunu, 12 funciones × 2 dims — correr antes de tocar `problems/cec2022_numba.py` |
 | `tests/test_orquestador_threading_maxfes.py` / `test_orquestador_threading.py` / `test_orquestador_threading2.py` | Integración completa, vía MaxFES / clásica (nombres históricos: ya no usan threading) |
 | `tests/test_experimentos.py` | Smoke del harness (`middleware`/`pso`/`de`) |
 | `tests/test_fase0…test_fase3_transferencia_exitosa.py` | Unitarios por fase |

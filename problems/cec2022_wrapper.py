@@ -81,7 +81,7 @@ class ProblemaCEC2022:
     consumo de presupuesto de los dos algoritmos.
     """
 
-    def __init__(self, numero_funcion: int, ndim: int):
+    def __init__(self, numero_funcion: int, ndim: int, backend: str = "numba"):
         if numero_funcion not in _FUNCIONES_CEC2022:
             raise ValueError(
                 f"Función F{numero_funcion} no existe en CEC 2022. "
@@ -92,11 +92,32 @@ class ProblemaCEC2022:
                 f"Dimensión {ndim} no estándar para CEC 2022. "
                 f"Debe ser una de {DIMENSIONES_VALIDAS}."
             )
+        if backend not in ("numba", "opfunu"):
+            raise ValueError(
+                f"backend '{backend}' no reconocido. Debe ser 'numba' "
+                f"(evaluador compilado, default) u 'opfunu' (referencia "
+                f"interpretada, usado por el test de paridad)."
+            )
 
         self._funcion = _FUNCIONES_CEC2022[numero_funcion](ndim=ndim)
         self.numero_funcion = numero_funcion
         self.ndim = ndim
         self.nombre = self._funcion.name
+        self.backend = backend
+
+        # Backend compilado (D-5, docs/configuracion_experimental.md): evita
+        # el overhead de opfunu/numpy por llamada, que domina el tiempo de
+        # la parrilla experimental. Reutiliza los mismos arrays de
+        # shift/rotación/shuffle que opfunu ya cargó arriba — no es una
+        # reimplementación independiente de la especificación CEC, es el
+        # mismo cómputo compilado (paridad validada en
+        # tests/test_cec2022_numba_paridad.py). Import perezoso: quien use
+        # backend="opfunu" no necesita tener `numba` instalado.
+        self._eval_compilado = None
+        if backend == "numba":
+            from problems.cec2022_numba import construir_evaluador
+            self._eval_compilado = construir_evaluador(numero_funcion, self._funcion)
+            self._eval_compilado(np.zeros(ndim))  # warm-up: compila aquí, no en la corrida
 
         # opfunu expone bounds como array (ndim, 2): [min, max] por dimensión
         self.limites = np.array(self._funcion.bounds, dtype=float)
@@ -151,7 +172,10 @@ class ProblemaCEC2022:
 
     def evaluar(self, x: np.ndarray) -> float:
         """Interfaz uniforme: recibe un vector y retorna un escalar."""
-        valor = float(self._funcion.evaluate(x))
+        if self.backend == "numba":
+            valor = float(self._eval_compilado(x))
+        else:
+            valor = float(self._funcion.evaluate(x))
         with self._lock_fes:
             self._fes += 1
             if valor < self._mejor_visto:

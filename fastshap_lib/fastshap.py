@@ -436,9 +436,18 @@ class FastSHAP:
                 break
 
         # Copy best model.
-        for param, best_param in zip(explainer.parameters(),
-                                     best_model.parameters()):
-            param.data = best_param.data
+        # PARCHE DE COMPATIBILIDAD (no altera la lógica del paper): si la
+        # pérdida de validación salió NaN en TODAS las épocas (posible con
+        # funciones de rango dinámico muy grande, p. ej. F8 del CEC2022),
+        # `NaN < best_loss` es siempre False y `best_model` nunca se
+        # asigna (queda en None). Antes esto crasheaba con
+        # AttributeError; ahora se conserva el `explainer` tal como quedó
+        # en la última época, en vez de copiarle los pesos de un "mejor
+        # modelo" que nunca existió.
+        if best_model is not None:
+            for param, best_param in zip(explainer.parameters(),
+                                         best_model.parameters()):
+                param.data = best_param.data
         explainer.eval()
 
     def shap_values(self, x):
