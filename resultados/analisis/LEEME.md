@@ -35,8 +35,14 @@ El detalle función por función de cada uno está en
 
 Por configuración: test de Friedman sobre la matriz de rangos (12
 funciones × 3 algoritmos). H0 = "los 3 algoritmos tienen el mismo rango
-promedio". `rechaza_h0=True` (p < 0.05) → hay evidencia de que al menos
-un algoritmo difiere — se pasa al post-hoc de Shaffer para saber cuál(es).
+promedio". Dos columnas dicen lo mismo de dos formas:
+
+- `rechaza_h0` (booleano): `True` si `p_valor < 0.05`.
+- `conclusion` (texto): la misma lectura en palabras — si se rechaza H0
+  hay evidencia de que **al menos un algoritmo difiere** de los otros
+  (no dice todavía cuál — para eso está el post-hoc de Shaffer, más
+  abajo); si NO se rechaza, no hay evidencia suficiente de que los 3
+  algoritmos se comporten distinto en esa configuración.
 
 ## `tablas/shaffer_d*.csv` y `shaffer_pct_significativo.csv` — setup §7
 

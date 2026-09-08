@@ -54,11 +54,29 @@ PARES_WILCOXON = (("middleware", "pso"), ("middleware", "de"), ("pso", "de"))
 
 
 def friedman(df: pd.DataFrame, dim: int, max_fes: int) -> dict:
-    """Test de Friedman sobre las 12 funciones (bloques) para los 3
-    algoritmos de esta configuración."""
+    """
+    Test de Friedman sobre las 12 funciones (bloques) para los 3
+    algoritmos de esta configuración. H0 = "los 3 algoritmos tienen el
+    mismo rango promedio". `rechaza_h0` (booleano, para filtrar/programar)
+    y `conclusion` (texto, para leer directo) dicen lo mismo: si
+    `p_valor < 0.05` se rechaza H0 (sí hay diferencia significativa entre
+    los algoritmos); si no, no se rechaza (no hay evidencia suficiente de
+    diferencia).
+    """
     errores = tabla_error_medio(df, dim, max_fes)
     stat, p = friedmanchisquare(*[errores.loc[a].values for a in ALGORITMOS])
-    return {"estadistico": float(stat), "p_valor": float(p), "rechaza_h0": p < ALPHA}
+    rechaza = p < ALPHA
+    conclusion = (
+        f"Se RECHAZA H0 (p={p:.4g} < {ALPHA}): hay diferencia "
+        f"significativa entre los 3 algoritmos"
+        if rechaza else
+        f"NO se rechaza H0 (p={p:.4g} >= {ALPHA}): no hay evidencia "
+        f"suficiente de diferencia entre los 3 algoritmos"
+    )
+    return {
+        "estadistico": float(stat), "p_valor": float(p),
+        "rechaza_h0": rechaza, "conclusion": conclusion,
+    }
 
 
 def shaffer(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
