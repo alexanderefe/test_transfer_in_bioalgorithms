@@ -23,6 +23,34 @@ from analisis.datos import (
 from analisis.rankings import ranking_configuracion
 
 
+def listar_figuras(dir_figuras: str | Path = "resultados/analisis/figuras") -> list[Path]:
+    """Todas las figuras PNG generadas por `analisis/`, en orden estable
+    (alfabético: primero los 8 CD, después las 2 de barras)."""
+    return sorted(Path(dir_figuras).glob("*.png"))
+
+
+def mostrar_todas_las_figuras(dir_figuras: str | Path = "resultados/analisis/figuras") -> None:
+    """
+    Despliega, una por una, TODAS las figuras generadas — pensado para
+    notebooks (Colab/Jupyter): cada PNG se muestra inline con su nombre
+    de archivo como título, sin tener que listarlas a mano. Fuera de un
+    notebook (script plano) solo imprime las rutas.
+    """
+    rutas = listar_figuras(dir_figuras)
+    if not rutas:
+        print(f"No hay figuras en {dir_figuras} — ¿corriste analisis/main.py?")
+        return
+    try:
+        from IPython.display import Image, Markdown, display
+    except ImportError:
+        for ruta in rutas:
+            print(ruta)
+        return
+    for ruta in rutas:
+        display(Markdown(f"**{ruta.name}**"))
+        display(Image(filename=str(ruta)))
+
+
 def barras_rangos_por_maxfes(df: pd.DataFrame, dim: int, ruta_salida: Path) -> None:
     """Barras de rango promedio × MaxFES, una serie por algoritmo, para
     una dimensionalidad (2 figuras en total, setup §8)."""

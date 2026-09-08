@@ -13,8 +13,13 @@ entre configuraciones.
   lo que da la secuencia estática de Shaffer S=(3,1,1) para los 3 p-valores
   ordenados ascendente — coincide con la tabla publicada (Shaffer 1986;
   García & Herrera 2008) para k=3.
-- Wilcoxon de rangos con signo: propuesto vs cada competidor, por función,
-  emparejado por semilla (`idx_semilla`) — veredicto better/equal/worse.
+- Wilcoxon de rangos con signo: **las 3 comparaciones por pares posibles**
+  entre los 3 algoritmos (middleware vs pso, middleware vs de, pso vs de
+  — el setup §7 solo pide propuesto-vs-cada-competidor, pso vs de se
+  agrega a pedido para caracterizar también la diferencia entre los dos
+  algoritmos base), por función, emparejado por semilla (`idx_semilla`)
+  — veredicto better/equal/worse desde la perspectiva del primer
+  algoritmo del par.
 - Desviación estándar de los rangos promedio entre algoritmos.
 """
 
@@ -39,6 +44,13 @@ ALPHA = 0.05
 # pares) — ver docstring del módulo. Si algún día k cambiara, esta
 # secuencia habría que rederivarla (no es válida para otro k).
 _DIVISORES_SHAFFER_K3 = (3, 1, 1)
+
+# Las 3 comparaciones por pares entre los 3 algoritmos. El orden importa
+# para el veredicto de Wilcoxon (better/equal/worse se lee "el primero
+# respecto del segundo"): middleware vs pso y middleware vs de siguen el
+# setup §7 (propuesto vs cada competidor); pso vs de se agrega para
+# comparar también los dos algoritmos base entre sí.
+PARES_WILCOXON = (("middleware", "pso"), ("middleware", "de"), ("pso", "de"))
 
 
 def friedman(df: pd.DataFrame, dim: int, max_fes: int) -> dict:
@@ -96,40 +108,51 @@ def pct_diferencias_significativas(tabla_shaffer: pd.DataFrame, propuesto: str =
     return 100.0 * del_propuesto["significativo"].mean()
 
 
-def wilcoxon_bew(df: pd.DataFrame, dim: int, max_fes: int, propuesto: str = "middleware") -> pd.DataFrame:
+def wilcoxon_bew_par(
+    df: pd.DataFrame, dim: int, max_fes: int, algoritmo_a: str, algoritmo_b: str,
+) -> pd.DataFrame:
     """
-    Wilcoxon de rangos con signo, propuesto vs cada competidor, POR
-    FUNCIÓN (12), emparejado por `idx_semilla` (51 pares). Veredicto:
-    p >= 0.05 -> equal; si no, better/worse según qué media sea menor.
+    Wilcoxon de rangos con signo entre `algoritmo_a` y `algoritmo_b`, POR
+    FUNCIÓN (12), emparejado por `idx_semilla` (51 pares). Veredicto
+    desde la perspectiva de `algoritmo_a`: p >= 0.05 -> equal; si no,
+    better/worse según qué media sea menor (menor error = mejor).
     """
     sub = df[(df["dim"] == dim) & (df["max_fes"] == max_fes)]
-    competidores = [a for a in ALGORITMOS if a != propuesto]
     filas = []
-    for competidor in competidores:
-        for funcion in range(1, N_FUNCIONES + 1):
-            pareado = sub[sub["funcion"] == funcion].pivot(
-                index="idx_semilla", columns="algoritmo", values="error")
-            a, b = pareado[propuesto].values, pareado[competidor].values
-            if np.allclose(a, b):
-                # wilcoxon no admite diferencias todas cero (división por N=0)
-                p_valor, veredicto = 1.0, "equal"
+    for funcion in range(1, N_FUNCIONES + 1):
+        pareado = sub[sub["funcion"] == funcion].pivot(
+            index="idx_semilla", columns="algoritmo", values="error")
+        a, b = pareado[algoritmo_a].values, pareado[algoritmo_b].values
+        if np.allclose(a, b):
+            # wilcoxon no admite diferencias todas cero (división por N=0)
+            p_valor, veredicto = 1.0, "equal"
+        else:
+            _, p_valor = wilcoxon(a, b)
+            if p_valor >= ALPHA:
+                veredicto = "equal"
             else:
-                _, p_valor = wilcoxon(a, b)
-                if p_valor >= ALPHA:
-                    veredicto = "equal"
-                else:
-                    veredicto = "better" if a.mean() < b.mean() else "worse"
-            filas.append({
-                "competidor": competidor, "funcion": funcion,
-                "p_valor": p_valor, "veredicto": veredicto,
-            })
+                veredicto = "better" if a.mean() < b.mean() else "worse"
+        filas.append({
+            "algoritmo_a": algoritmo_a, "algoritmo_b": algoritmo_b,
+            "funcion": funcion, "p_valor": p_valor, "veredicto": veredicto,
+        })
     return pd.DataFrame(filas)
 
 
+def wilcoxon_bew(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
+    """Las 3 comparaciones por pares (`PARES_WILCOXON`) de esta
+    configuración, concatenadas en una sola tabla."""
+    return pd.concat(
+        [wilcoxon_bew_par(df, dim, max_fes, a, b) for a, b in PARES_WILCOXON],
+        ignore_index=True,
+    )
+
+
 def resumen_wilcoxon_bew(tabla_bew: pd.DataFrame) -> pd.DataFrame:
-    """Conteo better/equal/worse sobre las 12 funciones, por competidor
-    (una fila por competidor)."""
-    return (tabla_bew.groupby("competidor")["veredicto"]
+    """Conteo better/equal/worse sobre las 12 funciones, por par de
+    algoritmos (una fila por comparación: middleware-pso, middleware-de,
+    pso-de)."""
+    return (tabla_bew.groupby(["algoritmo_a", "algoritmo_b"])["veredicto"]
             .value_counts().unstack(fill_value=0)
             .reindex(columns=["better", "equal", "worse"], fill_value=0))
 
