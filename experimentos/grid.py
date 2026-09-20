@@ -12,10 +12,10 @@ escribe su propio Parquet en `resultados/corridas/<run_id>.parquet` (y
 Ejemplos:
     # estimación, sin ejecutar nada
     python experimentos/grid.py --funciones 1-12 --dims 10,20 \
-        --maxfes 5000,50000,500000,5000000 --semillas 0-50 --dry-run
+        --maxfes 50000,500000,5000000,50000000 --semillas 0-50 --dry-run
 
     # un lote real pequeño
-    python experimentos/grid.py --funciones 1 --dims 10 --maxfes 5000 \
+    python experimentos/grid.py --funciones 1 --dims 10 --maxfes 50000 \
         --semillas 0-4 --max-epochs-fastshap 10
 
 Después de un lote: `python experimentos/consolidar.py`.
@@ -38,7 +38,7 @@ from experimentos.corrida import correr_corrida
 from experimentos.semillas import SEMILLAS
 from middleware.extraccion import EPOCHS_EXPLAINER
 
-MAXFES_VALIDOS = (5_000, 50_000, 500_000, 5_000_000)
+MAXFES_VALIDOS = (50_000, 500_000, 5_000_000, 50_000_000)
 DIMS_VALIDAS = (10, 20)
 
 # Algoritmos implementados (decisión D-4: sin competidores externos, solo
@@ -147,7 +147,7 @@ def main() -> None:
                     help=f"lista separada por comas, de {ALGORITMOS_VALIDOS}")
     ap.add_argument("--funciones", default="1-12")
     ap.add_argument("--dims", default="10,20")
-    ap.add_argument("--maxfes", default="5000,50000,500000,5000000")
+    ap.add_argument("--maxfes", default="50000,500000,5000000,50000000")
     ap.add_argument("--semillas", default="0-50", help="índices 0..50 en semillas.json")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--max-epochs-fastshap", type=int, default=EPOCHS_EXPLAINER)

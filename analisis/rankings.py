@@ -137,7 +137,7 @@ Una fila por cada una de las **8 configuraciones** (2 dimensionalidades ×
 **Importante:** los 8 rankings NUNCA se promedian entre sí — cada
 configuración (dim × MaxFES) se interpreta por separado (setup §6-§7).
 El detalle función por función de cada uno está en
-`tablas/rankings_d{10,20}_fes{5000,50000,500000,5000000}.csv`.
+`tablas/rankings_d{10,20}_fes{50000,500000,5000000,50000000}.csv`.
 
 ## `tablas/friedman.csv` — setup §7
 
@@ -204,8 +204,11 @@ más fino que el error medio ya usado en los rankings.
 
 - `diagnostico_d1d_activacion.csv`: % de corridas donde el middleware
   nunca llegó a activar la Fase 2 (`fes_primera_activacion` es NaN), por
-  MaxFES — cuantifica la D-1d (con MaxFES=5000 el middleware casi no
-  alcanza a actuar).
+  MaxFES. Originalmente cuantificaba la D-1d (con el extinto tier
+  MaxFES=5×10³ el middleware casi no alcanzaba a actuar) — ese tier se
+  retiró del protocolo (ver D-6, `configuracion_experimental.md`); con
+  los tiers actuales (≥5×10⁴) sigue siendo el diagnóstico relevante para
+  ver si el régimen persiste en el tier más chico vigente.
 - `diagnostico_canales_a_b.csv`: uso promedio de Canal A vs Canal B por
   MaxFES.
 - `diagnostico_r2_fase2.csv`: calidad del modelo subrogado (R²) por

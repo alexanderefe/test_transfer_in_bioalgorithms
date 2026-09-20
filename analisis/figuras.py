@@ -87,9 +87,12 @@ def tabla_suplementaria(df: pd.DataFrame) -> pd.DataFrame:
 
 def diagnostico_d1d(df_prop: pd.DataFrame) -> pd.DataFrame:
     """
-    D-1d (setup §9): con MaxFES=5000 el middleware no alcanza a
-    activarse. Cuantifica el % de corridas con `fes_primera_activacion`
-    NaN (el middleware nunca activó Fase 2), por MaxFES.
+    D-1d (setup §9): originalmente documentó que con el extinto tier
+    MaxFES=5×10³ el middleware no alcanzaba a activarse (retirado del
+    protocolo, ver D-6 en `configuracion_experimental.md`). Cuantifica el
+    % de corridas con `fes_primera_activacion` NaN (el middleware nunca
+    activó Fase 2), por MaxFES — sigue siendo el diagnóstico relevante
+    para el tier más chico vigente.
     """
     tabla = df_prop.assign(nunca_activo=df_prop["fes_primera_activacion"].isna())
     return (tabla.groupby("max_fes")["nunca_activo"]
@@ -156,8 +159,11 @@ def main():
     print(f"\nSuplementario: {len(salidas['suplementaria'])} filas "
           f"(algoritmo × dim × MaxFES × función)")
 
-    assert salidas["d1d"].loc[salidas["d1d"]["max_fes"] == 5000, "pct_nunca_activo"].iloc[0] > 0, \
-        "D-1d esperaba que a MaxFES=5000 el middleware no siempre active Fase 2"
+    # El extinto tier MaxFES=5000 (D-1d original) garantizaba pct>0; con
+    # los tiers vigentes (>=5e4) no hay una expectativa fija a priori —
+    # solo se valida que la tabla tenga un % válido por cada tier.
+    assert salidas["d1d"]["pct_nunca_activo"].between(0, 100).all(), \
+        "pct_nunca_activo debe estar en [0, 100] para cada MaxFES"
     print("\n[OK] figuras.py")
 
 

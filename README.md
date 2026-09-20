@@ -4,7 +4,7 @@
 **Autor:** Alexander Nicolas Farias Cifuentes
 **Profesor Guía:** Rodrigo Olivares Órdenes
 
-> Última actualización de este README: 2026-09-04. Si continúas este
+> Última actualización de este README: 2026-09-20. Si continúas este
 > proyecto desde una sesión/ventana de IA nueva, empieza por **"Estado
 > Actual del Proyecto"** más abajo — tiene el resumen de qué está hecho, qué
 > falta y en qué orden, con enlaces a `docs/` para el detalle de cada decisión.
@@ -110,7 +110,7 @@ from bioalgorithms.de import DE
 from middleware.orquestador import Orquestador
 
 problema = ProblemaCEC2022(numero_funcion=11, ndim=20)
-MAX_FES = 120_000            # presupuesto total A+B (5e3 / 5e4 / 5e5 / 5e6 en el protocolo)
+MAX_FES = 120_000            # presupuesto total A+B (5e4 / 5e5 / 5e6 / 5e7 en el protocolo, D-6)
 
 # semilla SIEMPRE como keyword; max_iteraciones se omite en la vía MaxFES
 alg_a = PSO(problema, 30, problema.ndim, problema.limites, semilla=42,
@@ -319,7 +319,9 @@ Algoritmo B (objetivo) ─┘   Round-robin: una generación de A, una de B, alt
 ### Pendiente ⏳ — en orden recomendado
 
 **Alcance ya fijado (no reabrir sin motivo):** evaluación **solo sobre CEC 2022**
-(12 funciones, D∈{10,20}) — no se amplía a CEC 2014/2017 ni D=50. La Fase 4
+(12 funciones, D∈{10,20}) — no se amplía a CEC 2014/2017 ni D=50 (reconfirmado
+en D-6, 2026-09-20: `opfunu` rechaza D=50 con error real, el benchmark oficial
+no define datos para esa dimensión). La Fase 4
 (cierre formal del ciclo, con ΔScore estructurado y auditoría SHAP) **no se
 implementa en código**: se aborda únicamente en la redacción de la tesis.
 Competidores = **solo PSO y DE corriendo solos** (D-4), no un roster externo.
@@ -351,28 +353,40 @@ momentáneamente sin haber perdido diversidad), **sin ejecutar el barrido
 empírico de sensibilidad** que estaba planeado. Ya no bloquea el
 lanzamiento — ver `docs/configuracion_experimental.md` D-1a.
 
-**Parrilla completa — lanzada y terminada (2026-09-08).** `experimentos/grid.py
---algoritmo middleware,pso,de` corrió las 14 688 corridas en **71.30 h**
-(por encima de la estimación de 50-52 h — el estimador de `grid.py` sigue
-siendo aproximado, no una cota dura). Terminó con 14 528 `ok` / 17 `fallo`;
-los 17 fallos eran el mismo bug (`fastshap_lib/fastshap.py`, `best_model`
-quedaba en `None` cuando la pérdida de validación salía `NaN` en todas las
-épocas — específico de F8 por su rango dinámico grande, ver "Bugs Resueltos
-Relevantes" #9). Con el parche aplicado se reintentaron las 17 y
-`resultados/corridas.parquet` / `corridas_propuesto.parquet` quedaron con
-**14 688 / 4 896 filas, 100% `estado="ok"`**.
+**Parrilla completa bajo el protocolo anterior — lanzada y terminada
+(2026-09-08), archivada en la rama `respaldo-2026-09-20-parrilla-analisis`.**
+`experimentos/grid.py --algoritmo middleware,pso,de` corrió las 14 688
+corridas de los tiers `{5×10³, 5×10⁴, 5×10⁵, 5×10⁶}` en **71.30 h** (por
+encima de la estimación de 50-52 h — el estimador de `grid.py` sigue siendo
+aproximado, no una cota dura). Terminó con 14 528 `ok` / 17 `fallo`; los 17
+fallos eran el mismo bug (`fastshap_lib/fastshap.py`, `best_model` quedaba en
+`None` cuando la pérdida de validación salía `NaN` en todas las épocas —
+específico de F8 por su rango dinámico grande, ver "Bugs Resueltos
+Relevantes" #9). Con el parche aplicado se reintentaron las 17 y quedaron
+**14 688 / 4 896 filas, 100% `estado="ok"`**. `analisis/` (rankings, Friedman
++ Shaffer, Wilcoxon, diagramas CD de Nemenyi) se construyó y validó contra
+ese dataset — ver `analisis/` y `resultados/analisis/LEEME.md`.
 
-1. **Construir `analisis/`** (no existe todavía — siguiente paso): rankings
-   con empates a 10⁻⁸ (N=3: propuesto/PSO/DE, ver nota abajo), Friedman +
-   Shaffer, diagramas de Diferencia Crítica (Nemenyi), Wilcoxon
-   better/equal/worse, desviación de rangos, figuras. El esquema de datos
-   que consume está en `docs/setup_experimental.md` §11 y ya está
-   disponible en `resultados/corridas.parquet` / `corridas_propuesto.parquet`.
-2. **Redacción**: Fase 4 como apartado separado (fuera del código); sección
+**Protocolo actualizado (D-6, 2026-09-20):** se retiró el tier `5×10³` y se
+agregó `5×10⁷` — `{5×10⁴, 5×10⁵, 5×10⁶, 5×10⁷}` — manteniendo D∈{10,20}
+(D=50 reconfirmado inviable). De las 14 688 corridas ya hechas, **11 016
+siguen siendo válidas** (los 3 tiers compartidos); faltan **3 672** nuevas
+para `5×10⁷`, estimadas en **~312 h (~13 días) con 5 workers** — más que
+toda la parrilla anterior junta. Ver `docs/configuracion_experimental.md`
+D-6 para el detalle.
+
+1. **Decidir cuándo lanzar las 3 672 corridas del tier `5×10⁷`** — el
+   compromiso de cómputo es grande, no se lanzó en la misma sesión que el
+   cambio de protocolo.
+2. **Regenerar `analisis/`** una vez completo el nuevo tier (el dataset
+   actual no pasa la validación de `analisis/datos.py::cargar_corridas()`
+   contra el protocolo vigente — a propósito, para no analizar tiers
+   mezclados de protocolos distintos).
+3. **Redacción**: Fase 4 como apartado separado (fuera del código); sección
    de resultados con la discusión obligatoria del setup (§9) — en qué MaxFES
    destaca el propuesto, cómo varía entre dimensionalidades, qué operadores
-   son beneficiosos/contraproducentes según el presupuesto (D-1d es
-   material directo para esto), robustez frente a PSO/DE solos.
+   son beneficiosos/contraproducentes según el presupuesto, robustez frente
+   a PSO/DE solos.
 
 **Diferido, no bloqueante:**
 - D-1e — `tests/test_barrera_seguridad.py` CASO 3 falla por una expectativa

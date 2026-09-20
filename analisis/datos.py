@@ -23,7 +23,7 @@ NOMBRE_ALGORITMO = {
     "de": "DE",
 }
 DIMS = (10, 20)
-MAXFES = (5_000, 50_000, 500_000, 5_000_000)
+MAXFES = (50_000, 500_000, 5_000_000, 50_000_000)
 N_FUNCIONES = 12
 N_SEMILLAS = 51
 
@@ -47,6 +47,22 @@ def cargar_corridas(ruta: str | Path = "resultados/corridas.parquet") -> pd.Data
         raise ValueError(
             f"Se esperaban {esperado} filas en {ruta}, hay {len(df)}. "
             f"¿Falta consolidar (experimentos/consolidar.py) o falta correr algo?"
+        )
+    # No basta con el conteo total: si el protocolo cambió de tiers (p. ej.
+    # se retiró un MaxFES y se agregó otro, D-6), un Parquet viejo puede
+    # tener EXACTAMENTE 14 688 filas por pura coincidencia de forma, pero
+    # con valores de max_fes que ya no son los vigentes. Se valida el
+    # conjunto exacto de (dim, max_fes) presentes contra `configuraciones()`.
+    presentes = set(map(tuple, df[["dim", "max_fes"]].drop_duplicates().values.tolist()))
+    esperados_cfg = set(configuraciones())
+    if presentes != esperados_cfg:
+        faltan = esperados_cfg - presentes
+        sobran = presentes - esperados_cfg
+        raise ValueError(
+            f"Las configuraciones (dim, max_fes) de {ruta} no coinciden con "
+            f"el protocolo vigente (MAXFES={MAXFES}, DIMS={DIMS}). "
+            f"Faltan: {sorted(faltan)}. Sobran (protocolo viejo, ya no vigente): "
+            f"{sorted(sobran)}."
         )
     return df
 
@@ -81,5 +97,5 @@ def configuraciones():
 
 def id_config(dim: int, max_fes: int) -> str:
     """Identificador corto y estable de una configuración, para nombres de
-    archivo (`rankings_d10_fes5000000`, etc.)."""
+    archivo (`rankings_d10_fes50000000`, etc.)."""
     return f"d{dim}_fes{max_fes}"

@@ -42,7 +42,7 @@ amplía a CEC 2014/2017 ni D=50. Protocolo completo en
 | Parámetro | Valor | Fuente |
 |---|---|---|
 | Criterio de parada | MaxFES agregado A+B | `problems/cec2022_wrapper.py` (`.fes`) |
-| Valores de MaxFES | 5×10³, 5×10⁴, 5×10⁵, 5×10⁶ | setup §2 |
+| Valores de MaxFES | 5×10⁴, 5×10⁵, 5×10⁶, 5×10⁷ (D-6, 2026-09-20) | setup §2 |
 | Planificador | Cooperativo determinista (round-robin, un hilo) | `Orquestador.ejecutar` — D-2, **resuelto** |
 | Sobrepaso tolerado | ≤ `n_individuos` por algoritmo | `Orquestador._puede_avanzar` |
 | `fraccion_presupuesto` (cuota PSO para su inercia) | **0.5 exacto** (round-robin, poblaciones iguales) | `bioalgorithms/base.py` — D-1b, **resuelto** |
@@ -158,9 +158,18 @@ Formato: **decisión tomada ahora** (para no bloquear el setup de pruebas) +
   fes_consumidas_b`, diferencia 0 en la corrida de prueba).
   Aplicado en `bioalgorithms/base.py`, `pso.py`, `de.py`.
 
-### D-1d · Comportamiento con `MaxFES = 5×10³`
+### D-1d · Comportamiento con `MaxFES = 5×10³` — TIER RETIRADO (ver D-6)
 
-- **Problema:** con ese presupuesto el middleware **no alcanza a activarse**.
+> **2026-09-20:** el tier `MaxFES = 5×10³` que motiva este punto **ya no
+> es parte del protocolo vigente** (D-6 lo retiró, junto con la
+> incorporación de `5×10⁷`). Se conserva esta entrada como registro
+> histórico del hallazgo y su diagnóstico (siguen siendo válidos para
+> entender el comportamiento del middleware con presupuestos chicos),
+> pero **no aplica a ninguna corrida futura**. Si el régimen "middleware
+> casi inerte" reaparece en el nuevo tier más chico (`5×10⁴`), amerita
+> una entrada nueva, no reabrir esta.
+
+- **Problema (histórico):** con ese presupuesto el middleware **no alcanza a activarse**.
   La condición de Fase 2 exige `len(hist_fuente) > 50` generaciones de la
   fuente; con ~166 evaluaciones totales / (30+30 por generación) ≈ 83
   generaciones repartidas, esa condición recién se cumple pasado el ~60 %
@@ -465,6 +474,66 @@ Formato: **decisión tomada ahora** (para no bloquear el setup de pruebas) +
     workers**, ~5 h por encima de la meta orientativa de 1.5 días. Ya no
     bloquea el lanzamiento de la parrilla — ver README "Pendiente".
 - Nueva dependencia: `numba>=0.67` en `requirements.txt`.
+
+### D-6 · Cambio de tiers de MaxFES y rechazo (repetido) de D=50 — RESUELTO
+
+- **Pedido (2026-09-20):** el usuario solicitó dos cambios al setup: (1)
+  quitar el tier `MaxFES = 5×10³` y agregar uno nuevo por encima de
+  `5×10⁶`; (2) agregar `D = 50` como tercera dimensionalidad.
+- **D=50 — rechazado, se reafirma la decisión ya tomada.** Se verificó
+  directamente contra `opfunu` (no por inspección de documentación):
+
+  ```
+  >>> cec2022.F12022(ndim=50)
+  ValueError: F12022 problem supports maximum 20 variables!
+  ```
+
+  El benchmark CEC2022 oficial **no define datos de shift/rotación para
+  D=50** (solo D∈{2,10,20} según la función) — esto ya estaba documentado
+  como decisión de alcance (`setup_experimental.md` §1: *"CEC 2022 no
+  define dimensiones mayores"*; `README.md`: *"no se amplía... ni
+  D=50"*), y esta verificación lo confirma con el error real, no solo por
+  la nota histórica. D=50 sí existe en CEC2014/2017, pero agregarlo
+  implicaría otro benchmark completo (otro wrapper, otro backend Numba
+  — el de `problems/cec2022_numba.py` está atado a las 12 funciones y
+  los datos de CEC2022 —, revalidar paridad, recalibrar tiempos), no un
+  cambio menor. **Se mantiene D∈{10,20}.**
+- **MaxFES — aplicado.** Se retira `5×10³` y se agrega `5×10⁷`,
+  manteniendo la progresión geométrica ×10 ya existente:
+  `{5×10⁴, 5×10⁵, 5×10⁶, 5×10⁷}`. Cambios: `experimentos/grid.py`
+  (`MAXFES_VALIDOS`, default de `--maxfes`), `analisis/datos.py`
+  (`MAXFES`). La D-1d (comportamiento del middleware con
+  `MaxFES=5×10³`) queda marcada como **tier retirado** — se conserva como
+  registro histórico, no aplica a corridas futuras (ver nota en esa
+  sección).
+- **Impacto en los datos ya calculados:** de las 14 688 corridas de la
+  parrilla completa (D-5), **11 016 siguen siendo válidas** (los 3 tiers
+  compartidos: `5×10⁴, 5×10⁵, 5×10⁶`) — no hace falta recalcularlas.
+  Faltan **3 672 corridas nuevas** (12 funciones × 2 dims × 51 semillas ×
+  3 algoritmos) para el tier `5×10⁷`; las 3 672 del tier retirado
+  `5×10³` quedan huérfanas (archivadas en la rama
+  `respaldo-2026-09-20-parrilla-analisis`, no se borran de `main` sin
+  pedido explícito).
+- **⚠ Impacto en cómputo — no es un agregado menor.** `experimentos/grid.py
+  --dry-run` con el protocolo nuevo:
+
+  | | secuencial | 5 workers |
+  |---|---|---|
+  | Solo el tier nuevo (5×10⁷, 3 672 corridas pendientes) | 1561.4 h | **~312.3 h (~13 días)** |
+
+  El tier `5×10⁷` por sí solo cuesta más que **toda** la parrilla anterior
+  completa (4 tiers, 71.3 h reales). Es la consecuencia esperada de que
+  el costo escale ~linealmente con MaxFES y el nuevo techo sea 10× el
+  anterior — no hay evaluador más rápido que lo evite (D-5 ya explotó esa
+  palanca). **Pendiente:** decidir cuándo lanzar esas 3 672 corridas — no
+  se lanzó en esta misma tanda, dado el tamaño del compromiso de cómputo.
+- **Validación reforzada:** `analisis/datos.py::cargar_corridas()` ahora
+  valida el conjunto exacto de `(dim, max_fes)` presentes contra el
+  protocolo vigente, no solo el conteo total de filas — un Parquet del
+  protocolo viejo podía tener casualmente las mismas 14 688 filas (4
+  tiers × ...) y pasar inadvertido con la validación anterior, produciendo
+  un análisis silenciosamente incorrecto (rankings/Friedman sobre tiers
+  que ya no son el protocolo, con el tier nuevo vacío).
 
 ---
 

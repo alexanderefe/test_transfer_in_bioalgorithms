@@ -36,7 +36,9 @@
 
 - Único criterio de parada: evaluaciones de la función objetivo,
   **agregadas** sobre los dos algoritmos base (contador `problema.fes`).
-- Cuatro valores: **5×10³, 5×10⁴, 5×10⁵, 5×10⁶**.
+- Cuatro valores: **5×10⁴, 5×10⁵, 5×10⁶, 5×10⁷** (D-6,
+  `configuracion_experimental.md`: se retiró 5×10³ y se agregó 5×10⁷,
+  manteniendo la progresión geométrica ×10 del setup original).
 - Corridas independientes: cada valor de MaxFES arranca desde cero con su
   propia semilla; **no** son continuación unas de otras.
 - **8 configuraciones experimentales** = 2 dimensionalidades × 4 MaxFES.
@@ -91,8 +93,8 @@ algoritmos base sin transferencia?— es la pregunta central de la tesis.
 - **Métrica de comparación:** media de las 51 corridas del error
   (`mean( f_obtenido − f(x*) )`).
 - Volumen: 12 × 2 × 4 × 51 = **4 896 corridas del algoritmo propuesto**
-  (más 51× por cada competidor). El coste de las corridas a MaxFES = 5×10⁶
-  es el principal cuello de botella → el harness debe soportar
+  (más 51× por cada competidor). El coste de las corridas a MaxFES = 5×10⁷
+  (D-6) es el principal cuello de botella → el harness debe soportar
   paralelismo por proceso y checkpoint/reanudación.
 
 ## 6. Construcción de rankings
@@ -172,11 +174,12 @@ Mínimo:
   es inferior.
 - Cómo varía su ranking entre `CEC2022_10` y `CEC2022_20`.
 - Operadores/componentes beneficiosos con cierto MaxFES pero
-  contraproducentes o **inertes** con otros. En particular:
-  **con MaxFES = 5×10³ el middleware no alcanza a activarse** (decisión
-  D-1d en `configuracion_experimental.md`) → en ese régimen el "algoritmo
-  propuesto" ≈ PSO + DE en paralelo sin transferencia. Debe discutirse
-  explícitamente.
+  contraproducentes o **inertes** con otros. La D-1d original (con el
+  extinto MaxFES = 5×10³ el middleware no alcanzaba a activarse) motivó
+  precisamente el retiro de ese tier en D-6 — con los tiers vigentes
+  (≥5×10⁴) corresponde verificar si el régimen "algoritmo propuesto" ≈
+  PSO + DE en paralelo sin transferencia persiste en el tier más chico
+  actual, y discutirlo si es así.
 - Robustez del propuesto: varianza de su posición en los 8 rankings frente
   a la de los competidores.
 
@@ -276,7 +279,7 @@ diferidas D-1a / D-1b / D-1d.
 | `n_canal_a`, `n_canal_b` | `n_transferencias_canal_{a,b}` | qué canal domina por MaxFES (**§9**) |
 | `n_abortos_wasserstein` | `n_transferencias_abortadas_wasserstein` | frecuencia de bloqueo por barrera |
 | `n_instancias_inyectadas` | `n_instancias_inyectadas_total` | magnitud de Canal B |
-| `fes_primera_activacion` | orquestador (añadir campo) | **NaN si el middleware nunca actúa** → clave para D-1d (MaxFES = 5×10³) |
+| `fes_primera_activacion` | orquestador (añadir campo) | **NaN si el middleware nunca actúa** → clave para D-1d (originalmente MaxFES = 5×10³, tier retirado por D-6; ahora se verifica en el tier más chico vigente) |
 | `frac_primera_activacion` | `fes_primera_activacion / max_fes` | comparabilidad entre MaxFES |
 | `r2_fase2` | `log_fase2[*].r2_modelo_subrogado` | calidad del subrogado (**D-1a**, discusión) |
 | `tiempo_pausado_middleware_seg` | `ResumenEjecucion` | sobrecoste del middleware |
