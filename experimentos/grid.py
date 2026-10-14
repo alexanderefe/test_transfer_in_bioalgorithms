@@ -3,8 +3,9 @@ Recorre una parrilla de corridas del harness experimental (setup §5).
 
 Ejecuta, para el producto cartesiano de funciones × dimensiones × MaxFES ×
 semillas, una corrida por combinación, en paralelo por proceso. Cada corrida
-escribe su propio Parquet en `resultados/corridas/<run_id>.parquet` (y
-`resultados/corridas_propuesto/<run_id>.parquet`), de modo que:
+escribe su propio Parquet en `<salida>/corridas/<run_id>.parquet` (y
+`<salida>/corridas_propuesto/<run_id>.parquet`), donde `<salida>` es la
+carpeta de `--salida` (default `resultados`), de modo que:
   - no hay contención entre workers,
   - una interrupción no corrompe nada,
   - re-lanzar el comando SALTA las corridas ya hechas (reanudación).
@@ -18,7 +19,12 @@ Ejemplos:
     python experimentos/grid.py --funciones 1 --dims 10 --maxfes 50000 \
         --semillas 0-4 --max-epochs-fastshap 10
 
-Después de un lote: `python experimentos/consolidar.py`.
+    # la parrilla completa en una carpeta propia (no toca `resultados/`)
+    python experimentos/grid.py --salida resultados_2026-10
+
+Después de un lote, con la misma carpeta:
+    python experimentos/consolidar.py --salida resultados_2026-10
+    python analisis/main.py --resultados resultados_2026-10
 """
 
 from __future__ import annotations
@@ -242,7 +248,9 @@ def main() -> None:
     # calibrado a esa carga.
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--max-epochs-fastshap", type=int, default=EPOCHS_EXPLAINER)
-    ap.add_argument("--salida", default="resultados")
+    ap.add_argument("--salida", default="resultados",
+                    help="carpeta de resultados de esta ejecución (se crea si no existe); "
+                         "usar la misma en consolidar.py --salida y analisis/main.py --resultados")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -331,7 +339,7 @@ def main() -> None:
                   f"| ETA {eta / 3600:.1f} h", flush=True)
 
     print(f"\nHecho: {ok} ok, {fallo} fallo en {(time.time() - t0) / 3600:.2f} h. "
-          f"Consolidá con:  python experimentos/consolidar.py")
+          f"Consolidá con:  python experimentos/consolidar.py --salida {args.salida}")
 
 
 if __name__ == "__main__":

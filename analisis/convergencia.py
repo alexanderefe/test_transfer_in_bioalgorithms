@@ -21,8 +21,9 @@ Magnitud del eje Y (`magnitud`):
     2700, las diferencias cerca del óptimo se ven mejor con "error".
 
 Uso:
-    python analisis/convergencia.py [--corridas resultados/corridas.parquet]
-        [--salida resultados/analisis] [--magnitud error|fitness]
+    python analisis/convergencia.py [--resultados resultados]
+        [--corridas <resultados>/corridas.parquet]
+        [--salida <resultados>/analisis] [--magnitud error|fitness]
         [--sin-por-funcion] [--por-semilla] [--semillas 0,1,2]
 """
 
@@ -267,8 +268,10 @@ def generar_todos(
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--corridas", default="resultados/corridas.parquet")
-    ap.add_argument("--salida", default="resultados/analisis")
+    ap.add_argument("--resultados", default="resultados",
+                    help="carpeta de resultados de la parrilla (--salida de grid.py)")
+    ap.add_argument("--corridas", default=None)
+    ap.add_argument("--salida", default=None)
     ap.add_argument("--magnitud", choices=MAGNITUDES, default="error")
     ap.add_argument("--sin-por-funcion", action="store_true",
                     help="solo los 8 paneles, sin las 96 figuras por función")
@@ -277,6 +280,8 @@ def main() -> None:
     ap.add_argument("--semillas", default=None,
                     help="con --por-semilla: lista de idx_semilla, p. ej. 0,1,2")
     args = ap.parse_args()
+    args.corridas = args.corridas or str(Path(args.resultados) / "corridas.parquet")
+    args.salida = args.salida or str(Path(args.resultados) / "analisis")
     semillas = [int(s) for s in args.semillas.split(",")] if args.semillas else None
     generar_todos(args.corridas, args.salida, args.magnitud,
                   por_funcion=not args.sin_por_funcion,

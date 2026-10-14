@@ -5,10 +5,15 @@ Nemenyi, figuras y tablas restantes (barras por MaxFES, suplementario,
 diagnósticos §9) y gráficos de convergencia.
 
 Uso:
-    python analisis/main.py [--corridas resultados/corridas.parquet]
-                            [--propuesto resultados/corridas_propuesto.parquet]
-                            [--salida resultados/analisis]
+    python analisis/main.py [--resultados resultados]
+                            [--corridas <resultados>/corridas.parquet]
+                            [--propuesto <resultados>/corridas_propuesto.parquet]
+                            [--salida <resultados>/analisis]
                             [--convergencia-por-semilla]
+
+`--resultados` es la misma carpeta que `--salida` de `experimentos/grid.py`
+y `experimentos/consolidar.py`; las otras tres rutas se derivan de ella
+salvo que se pasen explícitamente.
 
 Las figuras de convergencia por semilla (4 896) solo se generan con
 `--convergencia-por-semilla`; para más opciones (magnitud fitness, un
@@ -31,11 +36,17 @@ from analisis import cd_nemenyi, convergencia, estadistica, figuras, rankings
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--corridas", default="resultados/corridas.parquet")
-    ap.add_argument("--propuesto", default="resultados/corridas_propuesto.parquet")
-    ap.add_argument("--salida", default="resultados/analisis")
+    ap.add_argument("--resultados", default="resultados",
+                    help="carpeta de resultados de la parrilla (--salida de grid.py)")
+    ap.add_argument("--corridas", default=None)
+    ap.add_argument("--propuesto", default=None)
+    ap.add_argument("--salida", default=None)
     ap.add_argument("--convergencia-por-semilla", action="store_true")
     args = ap.parse_args()
+    resultados = Path(args.resultados)
+    args.corridas = args.corridas or str(resultados / "corridas.parquet")
+    args.propuesto = args.propuesto or str(resultados / "corridas_propuesto.parquet")
+    args.salida = args.salida or str(resultados / "analisis")
 
     dir_tablas = Path(args.salida) / "tablas"
     dir_figuras = Path(args.salida) / "figuras"

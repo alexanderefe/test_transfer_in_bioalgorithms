@@ -459,12 +459,20 @@ parrilla vigente son **6 algoritmos × 4 896 = 29 376 corridas, todas desde
 cero, ~356 h (~14.9 días) con 24 workers** (`grid.py --dry-run`; tomarlo
 como ±40 % por algoritmo).
 
-1. **Lanzar la parrilla** (`python experimentos/grid.py`, default: los 6
-   algoritmos y los 4 tiers; reanudable). Las corridas viejas de
-   `resultados/corridas/` se re-ejecutan y se sobrescriben solas. Si se
-   quieren conservar como registro, archivar `resultados/` antes de lanzar.
-2. **Regenerar `analisis/`** una vez completa. `cargar_corridas()` valida
-   tiers, algoritmos y evaluador: no deja analizar datos mezclados.
+1. **Lanzar la parrilla** en una carpeta propia:
+   `python experimentos/grid.py --salida <carpeta>` (default: los 6
+   algoritmos y los 4 tiers; reanudable relanzando con la misma
+   `--salida`). Con una carpeta nueva, `resultados/` queda intacto (sus
+   corridas son del evaluador viejo y del tier retirado 5×10³). Sin
+   `--salida` se usa `resultados/`: las corridas de los tiers vigentes se
+   sobrescriben, pero las 3 672 de `5×10³` quedan y contaminan el
+   consolidado. Puede repartirse entre dos computadores: ver
+   "Ejecución de la parrilla en dos computadores" más abajo.
+2. **Consolidar y regenerar `analisis/`** una vez completa, con la misma
+   carpeta: `python experimentos/consolidar.py --salida <carpeta>` y
+   `python analisis/main.py --resultados <carpeta>` (salida en
+   `<carpeta>/analisis/`). `cargar_corridas()` valida tiers, algoritmos,
+   evaluador y checkpoints: no deja analizar datos mezclados.
 3. **Canal A heterogéneo (D-10) — revisar con la parrilla.** Con una
    semilla, el Canal A PSO↔DE casi nunca supera el umbral ΔS > 0.02 y, al
    ocupar el 10 % de MaxFES por ventana, reduce a la mitad las inyecciones
@@ -490,6 +498,56 @@ como ±40 % por algoritmo).
    algoritmos, tier `5×10³` y "Canal A = 0 en las 4 896 corridas"
    (anterior a D-10). Sus resultados quedan inválidos y no se pueden citar
    como definitivos. Hay que reemplazarlos con los de la nueva parrilla.
+
+#### Ejecución de la parrilla en dos computadores
+
+No requiere cambios de código: `grid.py` filtra por `--maxfes`,
+`--algoritmo` y `--semillas`, y cada computador escribe en su propia
+carpeta (`--salida`). Estimación de `grid.py --dry-run` con 24 workers en
+el Xeon E5-2673 v3 (D-7; ±40 % por algoritmo):
+
+| Tier | Corridas | middleware | pso | de | cmaes | madde | nlshadersp | Total |
+|---|---|---|---|---|---|---|---|---|
+| 5×10⁴ + 5×10⁵ + 5×10⁶ | 22 032 | 13.1 h | 1.7 h | 10.3 h | 12.8 h | 2.9 h | 4.4 h | **~45 h** |
+| 5×10⁷ | 7 344 | 51.8 h | 15.1 h | 92.5 h | 85.1 h | 26.5 h | 40.1 h | **~311 h** |
+
+**Dividir solo por MaxFES desbalancea:** el tier 5×10⁷ concentra el 87 %
+del cómputo. Un computador termina en ~2 días y el otro sigue ~11 días
+más; el total baja apenas de ~356 h a ~311 h.
+
+**División balanceada** (si ambos computadores son equivalentes al Xeon
+de 24 hilos): el computador A toma además parte del 5×10⁷.
+
+```bash
+# Computador A (~178 h ≈ 7.4 días)
+python experimentos/grid.py --salida resultados_A --maxfes 50000,500000,5000000
+python experimentos/grid.py --salida resultados_A --maxfes 50000000 --algoritmo de,nlshadersp
+
+# Computador B (~179 h ≈ 7.4 días)
+python experimentos/grid.py --salida resultados_B --maxfes 50000000 --algoritmo middleware,pso,cmaes,madde
+```
+
+> **Pendiente:** las características del segundo computador aún no se
+> conocen (2026-10-13). Si es más lento o tiene menos hilos, hay que
+> redistribuir: correr `grid.py --dry-run --workers <n>` con el subconjunto
+> de cada computador y mover algoritmos entre ellos, o dividir por
+> semillas (`--semillas 0-25` / `--semillas 26-50`) para un ajuste más
+> fino. La estimación está calibrada para el Xeon; en otra CPU es solo
+> orientativa.
+
+**Requisitos para unir las partes:**
+1. **Mismo commit en ambos computadores** (`git log -1`). La columna
+   `version` registra el commit, pero `analisis/` solo valida el evaluador
+   y los checkpoints, no que el commit coincida.
+2. **Mismas versiones de dependencias** (`requirements.txt`; sobre todo
+   numba, cma, torch y xgboost).
+3. **Unir al terminar:** copiar el contenido de `corridas/`,
+   `corridas_propuesto/`, `logs_middleware/` y `fallos/` de ambas carpetas
+   a una sola, y correr ahí `consolidar.py --salida <carpeta>` y
+   `analisis/main.py --resultados <carpeta>`. Los archivos no chocan (el
+   `run_id` incluye algoritmo, función, dimensión, MaxFES y semilla), y
+   `cargar_corridas()` exige las 29 376 corridas: si falta alguna, lo
+   detecta.
 
 **Diferido, no bloqueante:**
 - Ablation Study: descartado por tiempo, queda como trabajo futuro.
