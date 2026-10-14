@@ -11,10 +11,19 @@ social (Kennedy & Eberhart, 1995; variante con inercia de Shi & Eberhart).
 """
 
 import numpy as np
-from bioalgorithms.base import AlgoritmoBioinspirado
+from bioalgorithms.base import AlgoritmoBioinspirado, DIM_ADOPCION, DIM_EXPLORACION
 
 
 class PSO(AlgoritmoBioinspirado):
+
+    # Rango de referencia de la inercia para el espacio común del Canal A
+    # (D-10): el calendario lineal clásico 0.9 → 0.4 (Shi & Eberhart, 1998),
+    # el mismo de la configuración congelada. w = 0.4 ↔ exploración 0,
+    # w = 0.9 ↔ exploración 1.
+    W_REF = (0.4, 0.9)
+    # Cotas del calendario tras un desplazamiento por Canal A: w ≥ 0 y
+    # w ≤ 1 (con w > 1 las velocidades crecen sin límite).
+    W_COTAS = (0.0, 1.0)
 
     def __init__(self, funcion_objetivo, n_individuos, n_dimensiones, limites,
                  max_iteraciones=None, semilla=None,
@@ -118,12 +127,22 @@ class PSO(AlgoritmoBioinspirado):
         return {"w": self.w_actual, "c1": self.c1, "c2": self.c2}
 
     # ------------------------------------------------------------------
-    # Sobrescritura del canal A (Fase 3) para PSO: si PSO fuera alguna vez
-    # algoritmo objetivo (no es el caso en esta tesis, pero se deja
-    # implementado por completitud y extensibilidad futura), interpretaría
-    # los parámetros transferidos como ajustes a w, c1 o c2.
+    # Canal A (Fase 3). Con roles dinámicos PSO puede ser objetivo (de DE o
+    # de otro PSO), así que interpreta los parámetros transferidos.
     # ------------------------------------------------------------------
     def recibir_parametros_transferidos(self, parametros: dict) -> None:
+        if "w" in parametros:
+            # D-10: la inercia vigente la fija el calendario lineal en cada
+            # paso, así que asignar w directamente se perdería en la
+            # generación siguiente. Se DESPLAZA el calendario completo por
+            # Δ = w_transferida − w_actual: sigue decreciendo con la misma
+            # pendiente, en el nuevo nivel (cambio persistente, igual que
+            # F/CR en DE). Cada extremo se acota a W_COTAS.
+            delta = float(parametros["w"]) - self.w_actual
+            lo, hi = self.W_COTAS
+            self.w_max = float(np.clip(self.w_max + delta, lo, hi))
+            self.w_min = float(np.clip(self.w_min + delta, lo, hi))
+            self.w_actual = float(np.clip(self.w_actual + delta, lo, hi))
         if "w_max" in parametros:
             self.w_max = float(parametros["w_max"])
         if "w_min" in parametros:
@@ -132,3 +151,36 @@ class PSO(AlgoritmoBioinspirado):
             self.c1 = float(parametros["c1"])
         if "c2" in parametros:
             self.c2 = float(parametros["c2"])
+
+    def a_espacio_comun(self, hiperparametros: dict) -> dict:
+        """
+        Espacio común (D-10): exploración = w normalizada contra W_REF
+        (afín, sin recorte); adopción = peso social relativo c2/(c1+c2).
+        """
+        latente = {}
+        if "w" in hiperparametros:
+            lo, hi = self.W_REF
+            latente[DIM_EXPLORACION] = (float(hiperparametros["w"]) - lo) / (hi - lo)
+        if "c1" in hiperparametros and "c2" in hiperparametros:
+            suma = float(hiperparametros["c1"]) + float(hiperparametros["c2"])
+            if suma > 0:
+                latente[DIM_ADOPCION] = float(hiperparametros["c2"]) / suma
+        return latente
+
+    def desde_espacio_comun(self, latente: dict) -> dict:
+        """
+        Inversa: exploración → w (luego aplicada como desplazamiento del
+        calendario); adopción → reparto de c1 + c2 entre ambos
+        coeficientes, conservando su suma actual (la intensidad total de
+        atracción no cambia, solo cuánto pesa lo social frente a lo propio).
+        """
+        hiperparametros = {}
+        if DIM_EXPLORACION in latente:
+            lo, hi = self.W_REF
+            hiperparametros["w"] = lo + float(latente[DIM_EXPLORACION]) * (hi - lo)
+        if DIM_ADOPCION in latente:
+            suma = self.c1 + self.c2
+            adopcion = float(np.clip(latente[DIM_ADOPCION], 0.0, 1.0))
+            hiperparametros["c1"] = (1.0 - adopcion) * suma
+            hiperparametros["c2"] = adopcion * suma
+        return hiperparametros

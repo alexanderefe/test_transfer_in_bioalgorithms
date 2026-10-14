@@ -63,6 +63,7 @@ from middleware.transferencia import (
 )
 from middleware.barrera_seguridad import (
     evaluar_barrera_wasserstein, filtrar_instancias_por_mmd,
+    objetivo_colapsado, ResultadoBarreraSeguridad,
 )
 
 
@@ -101,6 +102,8 @@ class EntradaLogFase3:
     n_instancias_rechazadas_mmd: int
     rmp_resultante: float
     delta_score_posterior: Optional[float] = None
+    mmd_aplicable: Optional[bool] = None  # Canal B: False si el objetivo
+                                           # estaba colapsado (D-11)
 
 
 @dataclass
@@ -136,6 +139,8 @@ class ResumenEjecucion:
     n_transferencias_canal_a: int = 0
     n_transferencias_canal_b: int = 0
     n_instancias_inyectadas_total: int = 0
+    n_canal_b_mmd_no_aplicable: int = 0   # Canal B con objetivo colapsado:
+                                           # el filtro MMD aprobó todo (D-11)
     fitness_final_algoritmo_a: float = float("inf")
     fitness_final_algoritmo_b: float = float("inf")
     tiempo_total_segundos: float = 0.0
@@ -588,37 +593,46 @@ class Orquestador:
         # adicionales), se delega a _aplicar_canal_b() y se retorna
         # "canal_b_aplicado".
         #
-        # Abort (Wasserstein): ya manejado arriba, nunca llega aquí.
+        # Barrera dura (Wasserstein, ecuación 7): se evalúa ANTES de
+        # cualquier canal. Si W1 > θ_W, se aborta el ciclo sin transferir
+        # nada. El filtro MMD del Canal B asume que esta comprobación de
+        # ubicación ya se hizo (su MMD está centrado y solo mira la forma).
+        barrera = self._evaluar_barrera_wasserstein(
+            iteracion_actual, alg_fuente, alg_objetivo)
+        if not barrera.transferencia_permitida:
+            return False
 
         if (self._estado_transferencia.canal_activo == CanalActivo.NINGUNO
                 or self._estado_transferencia.canal_activo == CanalActivo.CANAL_A):
 
-            # Intentar Canal A: interpolar hiperparámetros del objetivo
-            # hacia los del fuente usando el RMP actual.
+            # Intentar Canal A: interpolar, en el espacio latente común
+            # (D-10), los hiperparámetros del objetivo hacia los de escape
+            # del fuente usando el RMP actual. Funciona en ambos sentidos
+            # PSO↔DE: el rol lo deciden los roles dinámicos de Fase 1.
             payload = aplicar_canal_a(
                 alg_objetivo,
                 self._conocimiento_ciclo_actual.parametros_escape["hiperparametros"],
                 self._estado_transferencia.rmp_actual,
+                alg_fuente,
             )
 
-            # OPCIÓN 1 acordada: si el payload es vacío (ninguna clave en
-            # común entre fuente y objetivo, ej. PSO {w,c1,c2} vs DE {F,CR}),
-            # Canal A es estructuralmente inerte — no modificaría nada al
-            # algoritmo objetivo durante las 200 iteraciones de la ventana.
-            # En ese caso se escala DIRECTAMENTE a Canal B sin esperar la
-            # ventana, evitando desperdiciar 200 iteraciones y el ΔScore
-            # negativo producido por la convergencia natural del objetivo
-            # (que se confundía erróneamente con un efecto de Canal A).
+            # OPCIÓN 1 acordada: si el payload es vacío (fuente y objetivo
+            # no comparten ninguna dimensión del espacio común), Canal A es
+            # estructuralmente inerte — no modificaría nada al objetivo
+            # durante la ventana. En ese caso se escala DIRECTAMENTE a
+            # Canal B sin esperar la ventana. Desde D-10 PSO y DE comparten
+            # exploración y adopción, así que esto solo ocurre con un
+            # algoritmo que no implemente a_espacio_comun().
             if not payload:
                 self._log(
-                    f"it={iteracion_actual:4d} | Canal A inerte: sin hiperparámetros "
+                    f"it={iteracion_actual:4d} | Canal A inerte: sin dimensiones "
                     f"comunes entre fuente ({nombre_fuente}) y objetivo ({nombre_objetivo}). "
                     f"Escalando directamente a Canal B.",
                     nivel="WARN",
                 )
                 self._estado_transferencia.canal_activo = CanalActivo.CANAL_B
                 return self._aplicar_canal_b(
-                    iteracion_actual, alg_fuente, alg_objetivo, resultado_deteccion
+                    iteracion_actual, alg_fuente, alg_objetivo, barrera
                 )
 
             # Payload no vacío: Canal A tiene hiperparámetros que transferir.
@@ -631,11 +645,8 @@ class Orquestador:
             self.resumen.n_transferencias_canal_a += 1
             self.resumen.log_fase3.append(asdict(EntradaLogFase3(
                 iteracion=iteracion_actual,
-                distancia_wasserstein=float(
-                    evaluar_barrera_wasserstein(
-                        alg_fuente.poblacion, alg_objetivo.poblacion,
-                        self.limites).distancia_wasserstein),
-                umbral_wasserstein=0.0,
+                distancia_wasserstein=float(barrera.distancia_wasserstein),
+                umbral_wasserstein=float(barrera.umbral_wasserstein),
                 transferencia_permitida=True,
                 canal_utilizado=CanalActivo.CANAL_A.value,
                 n_instancias_aprobadas_mmd=0,
@@ -651,7 +662,7 @@ class Orquestador:
 
         # Canal B: inyección puntual y síncrona
         return self._aplicar_canal_b(
-            iteracion_actual, alg_fuente, alg_objetivo, resultado_deteccion
+            iteracion_actual, alg_fuente, alg_objetivo, barrera
         )
 
     def _evaluar_post_canal_a(self, iteracion_actual: int) -> None:
@@ -705,28 +716,83 @@ class Orquestador:
                 f"Escalando a Canal B...",
                 nivel="WARN",
             )
+            # Las poblaciones se movieron durante la ventana de Canal A:
+            # la barrera se vuelve a evaluar antes de inyectar instancias.
+            barrera = self._evaluar_barrera_wasserstein(
+                iteracion_actual, alg_fuente, alg_objetivo)
+            if not barrera.transferencia_permitida:
+                return
             self._estado_transferencia.canal_activo = CanalActivo.CANAL_B
             self._aplicar_canal_b(iteracion_actual, alg_fuente, alg_objetivo,
-                                   resultado_deteccion)
+                                   barrera)
+
+    def _evaluar_barrera_wasserstein(self, iteracion_actual: int,
+                                      alg_fuente, alg_objetivo
+                                      ) -> ResultadoBarreraSeguridad:
+        """
+        Barrera dura de la Fase 3 (ecuación 7): W1 entre las poblaciones
+        completas del fuente y del objetivo contra θ_W. Si se supera, aborta
+        el ciclo sin transferir nada: registra el aborto, limpia el estado
+        del ciclo y aplica el cooldown post-ciclo (las poblaciones no se
+        acercan de una generación a la siguiente, y sin cooldown se volvería
+        a pagar la Fase 2 en el siguiente monitoreo para abortar otra vez).
+        """
+        barrera = evaluar_barrera_wasserstein(
+            alg_fuente.poblacion, alg_objetivo.poblacion, self.limites)
+        if barrera.transferencia_permitida:
+            return barrera
+
+        self.resumen.n_transferencias_abortadas_wasserstein += 1
+        self.resumen.log_fase3.append(asdict(EntradaLogFase3(
+            iteracion=iteracion_actual,
+            distancia_wasserstein=float(barrera.distancia_wasserstein),
+            umbral_wasserstein=float(barrera.umbral_wasserstein),
+            transferencia_permitida=False,
+            canal_utilizado=CanalActivo.NINGUNO.value,
+            n_instancias_aprobadas_mmd=0,
+            n_instancias_rechazadas_mmd=0,
+            rmp_resultante=float(self._estado_transferencia.rmp_actual),
+        )))
+        self._conocimiento_ciclo_actual = None
+        self._rol_fuente_activo = None
+        self._rol_objetivo_activo = None
+        self._estado_transferencia = EstadoTransferencia()
+        self._fin_cooldown = self._reloj() + self._cooldown_post_ciclo
+        self._log(
+            f"it={iteracion_actual:4d} | ⛔ Transferencia abortada por la barrera "
+            f"de Wasserstein: W1={barrera.distancia_wasserstein:.2f} > "
+            f"θ_W={barrera.umbral_wasserstein:.2f} "
+            f"({barrera.distancia_wasserstein / barrera.diametro_maximo_espacio:.1%} "
+            f"del diámetro). Cooldown hasta {self._fin_cooldown} {self._unidad_reloj()}.",
+            nivel="WARN",
+        )
+        return barrera
 
     def _aplicar_canal_b(self, iteracion_actual: int,
                           alg_fuente, alg_objetivo,
-                          resultado_deteccion) -> str:
+                          barrera: ResultadoBarreraSeguridad) -> str:
         """
         Canal B: inyección puntual de instancias de élite. Filtra por MMD,
         inyecta, evalúa inmediatamente (sin correr generaciones adicionales).
+        Solo se llega aquí con la barrera de Wasserstein ya superada
+        (`barrera`, que se registra en el log de Fase 3).
 
         Tras ejecutar Canal B, el ciclo se cierra SIEMPRE — ya sea que
         haya inyectado instancias o no. Canal B es una intervención final:
         después de ella el middleware vuelve a monitoreo pasivo y los
         algoritmos corren con el estado resultante de la inyección.
         """
+        mmd_aplicable = not objetivo_colapsado(alg_objetivo.poblacion,
+                                               self.limites)
         aprobadas = filtrar_instancias_por_mmd(
             self._conocimiento_ciclo_actual.instancias_elite,
             alg_fuente.poblacion,
             alg_objetivo.poblacion,
-            umbral_precalculado=self._conocimiento_ciclo_actual.umbral_mmd_precalculado,
+            self.limites,
+            referencia=self._conocimiento_ciclo_actual.referencia_mmd,
         )
+        if not mmd_aplicable:
+            self.resumen.n_canal_b_mmd_no_aplicable += 1
         instancias_filtradas = (
             self._conocimiento_ciclo_actual.instancias_elite[aprobadas])
         fitness_filtrado = (
@@ -743,17 +809,20 @@ class Orquestador:
         self.resumen.n_transferencias_canal_b += 1
         self.resumen.log_fase3.append(asdict(EntradaLogFase3(
             iteracion=iteracion_actual,
-            distancia_wasserstein=0.0,
-            umbral_wasserstein=0.0,
+            distancia_wasserstein=float(barrera.distancia_wasserstein),
+            umbral_wasserstein=float(barrera.umbral_wasserstein),
             transferencia_permitida=True,
             canal_utilizado=CanalActivo.CANAL_B.value,
             n_instancias_aprobadas_mmd=n_aprobadas,
             n_instancias_rechazadas_mmd=n_rechazadas,
             rmp_resultante=float(self._estado_transferencia.rmp_actual),
+            mmd_aplicable=mmd_aplicable,
         )))
         self._log(
             f"it={iteracion_actual:4d} | Canal B: MMD ok={n_aprobadas} "
-            f"rechaz={n_rechazadas}. Evaluación inmediata (sin iterar).",
+            f"rechaz={n_rechazadas}"
+            f"{'' if mmd_aplicable else ' (objetivo colapsado: MMD no aplicable)'}"
+            f". Evaluación inmediata (sin iterar).",
             nivel="FASE3",
         )
 

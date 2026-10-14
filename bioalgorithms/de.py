@@ -15,10 +15,17 @@ Storn & Price (1997).
 """
 
 import numpy as np
-from bioalgorithms.base import AlgoritmoBioinspirado
+from bioalgorithms.base import AlgoritmoBioinspirado, DIM_ADOPCION, DIM_EXPLORACION
 
 
 class DE(AlgoritmoBioinspirado):
+
+    # Rango de referencia de F para el espacio común del Canal A (D-10):
+    # el rango efectivo de F según Storn & Price (1997), [0.4, 1.0].
+    # F = 0.4 ↔ exploración 0, F = 1.0 ↔ exploración 1. El F = 0.2 de la
+    # configuración congelada queda en exploración ≈ −0.33 (el mapa es
+    # afín y no se recorta, para que el RMP lo mueva gradualmente).
+    F_REF = (0.4, 1.0)
 
     def __init__(self, funcion_objetivo, n_individuos, n_dimensiones, limites,
                  max_iteraciones=None, semilla=None, F=0.5, CR=0.7,
@@ -95,3 +102,25 @@ class DE(AlgoritmoBioinspirado):
             self.F = float(np.clip(parametros["F"], 0.0, 2.0))
         if "CR" in parametros:
             self.CR = float(np.clip(parametros["CR"], 0.0, 1.0))
+
+    def a_espacio_comun(self, hiperparametros: dict) -> dict:
+        """Espacio común (D-10): exploración = F normalizado contra F_REF
+        (afín, sin recorte); adopción = CR."""
+        latente = {}
+        if "F" in hiperparametros:
+            lo, hi = self.F_REF
+            latente[DIM_EXPLORACION] = (float(hiperparametros["F"]) - lo) / (hi - lo)
+        if "CR" in hiperparametros:
+            latente[DIM_ADOPCION] = float(hiperparametros["CR"])
+        return latente
+
+    def desde_espacio_comun(self, latente: dict) -> dict:
+        """Inversa: exploración → F; adopción → CR (los recortes a rangos
+        válidos los hace recibir_parametros_transferidos)."""
+        hiperparametros = {}
+        if DIM_EXPLORACION in latente:
+            lo, hi = self.F_REF
+            hiperparametros["F"] = lo + float(latente[DIM_EXPLORACION]) * (hi - lo)
+        if DIM_ADOPCION in latente:
+            hiperparametros["CR"] = float(latente[DIM_ADOPCION])
+        return hiperparametros

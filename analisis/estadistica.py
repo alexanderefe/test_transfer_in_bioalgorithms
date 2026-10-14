@@ -3,23 +3,25 @@ Análisis estadístico (setup §7, α = 0.05). Todo se calcula por separado
 para cada una de las 8 configuraciones (dim × MaxFES) — nunca se agrupan
 entre configuraciones.
 
-- Friedman: H0 = "los 3 algoritmos tienen el mismo rango promedio" sobre
-  la matriz de rangos (12 funciones × 3 algoritmos). `scipy.stats.friedmanchisquare`.
+- Friedman: H0 = "los k algoritmos tienen el mismo rango promedio" sobre
+  la matriz de rangos (12 funciones × k algoritmos, k=6 desde D-8).
+  `scipy.stats.friedmanchisquare`.
 - Post-hoc de Shaffer: NO está en ninguna librería instalada (scikit-posthocs
   tiene Nemenyi/Conover/Miller/Siegel/Durbin/Quade, no Shaffer). Se
-  implementa aquí — con k=3 algoritmos hay solo 3 comparaciones por pares,
-  y por transitividad el número de hipótesis nulas verdaderas simultáneas
-  solo puede ser 0, 1 o 3 (nunca 2: si A=B y A=C, entonces B=C se sigue),
-  lo que da la secuencia estática de Shaffer S=(3,1,1) para los 3 p-valores
-  ordenados ascendente — coincide con la tabla publicada (Shaffer 1986;
-  García & Herrera 2008) para k=3.
-- Wilcoxon de rangos con signo: **las 3 comparaciones por pares posibles**
-  entre los 3 algoritmos (middleware vs pso, middleware vs de, pso vs de
-  — el setup §7 solo pide propuesto-vs-cada-competidor, pso vs de se
-  agrega a pedido para caracterizar también la diferencia entre los dos
-  algoritmos base), por función, emparejado por semilla (`idx_semilla`)
-  — veredicto better/equal/worse desde la perspectiva del primer
-  algoritmo del par.
+  implementa aquí, procedimiento estático (Shaffer 1986; García & Herrera
+  2008): con m = k(k-1)/2 p-valores ordenados ascendente, el i-ésimo se
+  multiplica por t_i = máximo nº de hipótesis nulas que pueden ser
+  simultáneamente verdaderas dado que las i-1 anteriores son falsas.
+  Ese conjunto de valores posibles se deriva por la recursión
+  S(k) = U_{j=1..k} { C(j,2) + x : x en S(k-j) }, S(0) = S(1) = {0} —
+  por transitividad no todo número es posible (con k=3, S={0,1,3}: si
+  A=B y A=C, entonces B=C). Para k=3 da la secuencia (3,1,1) que usaba
+  la versión anterior de este módulo, con 3 algoritmos.
+- Wilcoxon de rangos con signo: el propuesto contra cada uno de los
+  otros 5 algoritmos (setup §7) + pso vs de (agregado a pedido para
+  caracterizar también la diferencia entre los dos algoritmos base), por
+  función, emparejado por semilla (`idx_semilla`) — veredicto
+  better/equal/worse desde la perspectiva del primer algoritmo del par.
 - Desviación estándar de los rangos promedio entre algoritmos.
 """
 
@@ -33,6 +35,8 @@ sys.path.insert(0, str(RAIZ))
 
 import numpy as np
 import pandas as pd
+from math import comb
+
 from scipy.stats import friedmanchisquare, norm, wilcoxon
 
 from analisis.datos import ALGORITMOS, N_FUNCIONES, cargar_corridas, configuraciones, id_config
@@ -40,23 +44,37 @@ from analisis.rankings import ranking_configuracion, tabla_error_medio
 
 ALPHA = 0.05
 
-# Divisores estáticos de Shaffer para k=3 algoritmos (3 comparaciones por
-# pares) — ver docstring del módulo. Si algún día k cambiara, esta
-# secuencia habría que rederivarla (no es válida para otro k).
-_DIVISORES_SHAFFER_K3 = (3, 1, 1)
 
-# Las 3 comparaciones por pares entre los 3 algoritmos. El orden importa
-# para el veredicto de Wilcoxon (better/equal/worse se lee "el primero
-# respecto del segundo"): middleware vs pso y middleware vs de siguen el
-# setup §7 (propuesto vs cada competidor); pso vs de se agrega para
-# comparar también los dos algoritmos base entre sí.
-PARES_WILCOXON = (("middleware", "pso"), ("middleware", "de"), ("pso", "de"))
+
+def _nulas_verdaderas_posibles(k: int) -> set[int]:
+    """S(k): números posibles de hipótesis nulas verdaderas simultáneas
+    entre las k(k-1)/2 comparaciones por pares (Shaffer 1986)."""
+    s = {0: {0}, 1: {0}}
+    for n in range(2, k + 1):
+        s[n] = {comb(j, 2) + x for j in range(1, n + 1) for x in s[n - j]}
+    return s[k]
+
+
+def divisores_shaffer(k: int) -> tuple[int, ...]:
+    """t_1..t_m del procedimiento estático de Shaffer para k algoritmos:
+    t_i = max{ s en S(k) : s <= m - i + 1 }."""
+    m = k * (k - 1) // 2
+    posibles = _nulas_verdaderas_posibles(k)
+    return tuple(max(s for s in posibles if s <= m - i) for i in range(m))
+
+
+# El propuesto contra cada competidor (setup §7), más pso vs de para
+# comparar también los dos algoritmos base entre sí. El orden importa para
+# el veredicto de Wilcoxon (better/equal/worse se lee "el primero respecto
+# del segundo").
+PARES_WILCOXON = tuple(("middleware", a) for a in ALGORITMOS if a != "middleware") \
+    + (("pso", "de"),)
 
 
 def friedman(df: pd.DataFrame, dim: int, max_fes: int) -> dict:
     """
-    Test de Friedman sobre las 12 funciones (bloques) para los 3
-    algoritmos de esta configuración. H0 = "los 3 algoritmos tienen el
+    Test de Friedman sobre las 12 funciones (bloques) para los k
+    algoritmos de esta configuración. H0 = "los k algoritmos tienen el
     mismo rango promedio". `rechaza_h0` (booleano, para filtrar/programar)
     y `conclusion` (texto, para leer directo) dicen lo mismo: si
     `p_valor < 0.05` se rechaza H0 (sí hay diferencia significativa entre
@@ -66,12 +84,13 @@ def friedman(df: pd.DataFrame, dim: int, max_fes: int) -> dict:
     errores = tabla_error_medio(df, dim, max_fes)
     stat, p = friedmanchisquare(*[errores.loc[a].values for a in ALGORITMOS])
     rechaza = p < ALPHA
+    k = len(ALGORITMOS)
     conclusion = (
         f"Se RECHAZA H0 (p={p:.4g} < {ALPHA}): hay diferencia "
-        f"significativa entre los 3 algoritmos"
+        f"significativa entre los {k} algoritmos"
         if rechaza else
         f"NO se rechaza H0 (p={p:.4g} >= {ALPHA}): no hay evidencia "
-        f"suficiente de diferencia entre los 3 algoritmos"
+        f"suficiente de diferencia entre los {k} algoritmos"
     )
     return {
         "estadistico": float(stat), "p_valor": float(p),
@@ -83,7 +102,8 @@ def shaffer(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
     """
     Post-hoc de Shaffer sobre los rangos promedio de esta configuración:
     z = |R_i - R_j| / SE, SE = sqrt(k(k+1)/(6N)), p_crudo = 2(1-Φ(|z|)),
-    ajuste step-down con los divisores estáticos (3,1,1).
+    ajuste step-down con los divisores estáticos `divisores_shaffer(k)`
+    y p ajustado monótono: APV_i = min(1, max_{j<=i} t_j·p_j).
     """
     ranking = ranking_configuracion(df, dim, max_fes)
     rangos = {a: ranking.loc[a, ("resumen", "rango_promedio")] for a in ALGORITMOS}
@@ -101,7 +121,7 @@ def shaffer(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
 
     filas = []
     p_prev = 0.0
-    for (a, b, z, p_crudo), s in zip(crudos, _DIVISORES_SHAFFER_K3):
+    for (a, b, z, p_crudo), s in zip(crudos, divisores_shaffer(k)):
         p_ajustado = min(1.0, s * p_crudo)
         p_ajustado = max(p_ajustado, p_prev)
         p_prev = p_ajustado
@@ -158,7 +178,7 @@ def wilcoxon_bew_par(
 
 
 def wilcoxon_bew(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
-    """Las 3 comparaciones por pares (`PARES_WILCOXON`) de esta
+    """Las comparaciones por pares de `PARES_WILCOXON` en esta
     configuración, concatenadas en una sola tabla."""
     return pd.concat(
         [wilcoxon_bew_par(df, dim, max_fes, a, b) for a, b in PARES_WILCOXON],
@@ -168,15 +188,14 @@ def wilcoxon_bew(df: pd.DataFrame, dim: int, max_fes: int) -> pd.DataFrame:
 
 def resumen_wilcoxon_bew(tabla_bew: pd.DataFrame) -> pd.DataFrame:
     """Conteo better/equal/worse sobre las 12 funciones, por par de
-    algoritmos (una fila por comparación: middleware-pso, middleware-de,
-    pso-de)."""
+    algoritmos (una fila por comparación de `PARES_WILCOXON`)."""
     return (tabla_bew.groupby(["algoritmo_a", "algoritmo_b"])["veredicto"]
             .value_counts().unstack(fill_value=0)
             .reindex(columns=["better", "equal", "worse"], fill_value=0))
 
 
 def desviacion_rangos(df: pd.DataFrame, dim: int, max_fes: int) -> float:
-    """Desviación estándar de los rangos promedio entre los 3 algoritmos
+    """Desviación estándar de los rangos promedio entre los k algoritmos
     (medida de diversidad de desempeño, setup §7)."""
     ranking = ranking_configuracion(df, dim, max_fes)
     return float(ranking[("resumen", "rango_promedio")].std())
@@ -233,6 +252,13 @@ def generar_todos(
 
 
 def main():
+    # Secuencias de Shaffer verificadas contra los valores publicados
+    # (S(3) = {0,1,3}, S(4) = {0,1,2,3,6}; García & Herrera 2008).
+    assert divisores_shaffer(3) == (3, 1, 1)
+    assert _nulas_verdaderas_posibles(4) == {0, 1, 2, 3, 6}
+    assert divisores_shaffer(4) == (6, 3, 3, 3, 2, 1)
+    print(f"Divisores de Shaffer (k={len(ALGORITMOS)}): {divisores_shaffer(len(ALGORITMOS))}\n")
+
     salidas = generar_todos()
     print("Friedman (8 configuraciones):")
     print(salidas["friedman"].to_string(index=False))

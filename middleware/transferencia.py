@@ -157,36 +157,43 @@ def _registrar_log(estado: EstadoTransferencia, iteracion: int, evento: str,
 
 
 def aplicar_canal_a(algoritmo_objetivo, parametros_fuente: dict,
-                     rmp_actual: float) -> dict:
+                     rmp_actual: float, algoritmo_fuente) -> dict:
     """
-    Canal A: Transferencia Paramétrica Gradual. Interpola los
-    hiperparámetros actuales del algoritmo objetivo hacia los del
-    algoritmo fuente, con intensidad controlada por rmp_actual
-    (0 = sin cambio, 1 = adopción total del valor del fuente).
+    Canal A: Transferencia Paramétrica Gradual en un ESPACIO LATENTE
+    COMÚN (D-10, docs/configuracion_experimental.md).
 
-    Solo se interpolan las claves de hiperparámetros que EXISTEN en
-    ambos diccionarios (intersección), preservando el agnosticismo: el
-    middleware no necesita saber qué significan "F", "CR", "w", etc.,
-    solo que son números que pueden interpolarse linealmente. Claves
-    presentes solo en el fuente (sin equivalente en el objetivo) se
-    ignoran, ya que no hay un hiperparámetro correspondiente al cual
-    aplicarlas en el algoritmo objetivo.
+    1. El fuente traduce sus hiperparámetros de escape (Fase 2) al espacio
+       común: `algoritmo_fuente.a_espacio_comun(parametros_fuente)`.
+    2. El objetivo traduce los suyos vigentes al mismo espacio.
+    3. En cada dimensión que ambos declaran se interpola con el RMP:
+       z = (1 − rmp)·z_objetivo + rmp·z_fuente
+       (0 = sin cambio, 1 = adopción total de la posición del fuente).
+    4. El objetivo traduce de vuelta (`desde_espacio_comun`) y aplica el
+       resultado con `recibir_parametros_transferidos`.
+
+    El middleware sigue siendo agnóstico: no sabe qué son "w" o "F", solo
+    interpola números en dimensiones con nombre común (exploración,
+    adopción). Eso permite el Canal A entre algoritmos heterogéneos
+    (PSO↔DE, en ambos sentidos según los roles dinámicos), que antes era
+    estructuralmente inerte por no compartir claves.
+
+    Retorna los hiperparámetros aplicados al objetivo (en sus propias
+    claves); dict vacío si no comparten ninguna dimensión latente, en cuyo
+    caso el orquestador escala directo a Canal B.
     """
-    hiperparametros_objetivo_actuales = algoritmo_objetivo.obtener_hiperparametros_actuales()
-    nuevos_parametros = {}
+    latente_fuente = algoritmo_fuente.a_espacio_comun(parametros_fuente)
+    latente_objetivo = algoritmo_objetivo.a_espacio_comun(
+        algoritmo_objetivo.obtener_hiperparametros_actuales())
 
-    for clave in hiperparametros_objetivo_actuales:
-        valor_objetivo = hiperparametros_objetivo_actuales[clave]
-        if clave in parametros_fuente:
-            valor_fuente = parametros_fuente[clave]
-            valor_interpolado = (
-                (1 - rmp_actual) * valor_objetivo + rmp_actual * valor_fuente
-            )
-            nuevos_parametros[clave] = valor_interpolado
-        # Si la clave no existe en el fuente, no se modifica: el
-        # algoritmo objetivo conserva su valor actual para ese
-        # hiperparámetro específico.
+    latente_nuevo = {
+        dim: (1 - rmp_actual) * latente_objetivo[dim] + rmp_actual * latente_fuente[dim]
+        for dim in latente_objetivo
+        if dim in latente_fuente
+    }
+    if not latente_nuevo:
+        return {}
 
+    nuevos_parametros = algoritmo_objetivo.desde_espacio_comun(latente_nuevo)
     algoritmo_objetivo.recibir_parametros_transferidos(nuevos_parametros)
     return nuevos_parametros
 
@@ -307,7 +314,7 @@ def ejecutar_ciclo_transferencia(
 
     if estado.canal_activo == CanalActivo.CANAL_A:
         payload = aplicar_canal_a(
-            algoritmo_objetivo, parametros_fuente, estado.rmp_actual
+            algoritmo_objetivo, parametros_fuente, estado.rmp_actual, algoritmo_fuente
         )
         canal_usado = CanalActivo.CANAL_A
 
@@ -335,7 +342,8 @@ def ejecutar_ciclo_transferencia(
     if estado.canal_activo == CanalActivo.CANAL_B:
         # Filtro MMD sobre las instancias candidatas antes de inyectar.
         aprobadas = filtrar_instancias_por_mmd(
-            instancias_elite, algoritmo_fuente.poblacion, algoritmo_objetivo.poblacion
+            instancias_elite, algoritmo_fuente.poblacion,
+            algoritmo_objetivo.poblacion, limites,
         )
         instancias_filtradas = instancias_elite[aprobadas]
         fitness_filtrado = fitness_instancias_elite[aprobadas]

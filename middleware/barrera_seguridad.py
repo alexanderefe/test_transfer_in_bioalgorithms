@@ -13,27 +13,35 @@ las secciones 2.10 y 4.2.3 del documento de tesis:
      instancias candidatas individuales extraídas en la Fase 2, para
      verificar que cada instancia específica pertenezca a una
      distribución compatible con el espacio de búsqueda del algoritmo
-     objetivo, antes de que lleguen a la barrera dura de Wasserstein.
+     objetivo. Se aplica DESPUÉS de la barrera dura: su MMD está centrado
+     (compara forma, no ubicación) y asume que Wasserstein ya descartó
+     las poblaciones demasiado alejadas. El orquestador evalúa la barrera
+     al entrar a la Fase 3 y de nuevo antes de escalar de Canal A a
+     Canal B (las poblaciones se mueven durante la ventana de Canal A).
 
 DECISIONES DE FORMALIZACIÓN ACORDADAS EXPLÍCITAMENTE (el documento no
 especifica valores ni implementación concreta para ninguna de las dos):
 
 1. Wasserstein: se calcula de forma EXACTA como un problema de
    programación lineal de transporte óptimo (ecuación 6 del documento),
-   usando la librería POT (Python Optimal Transport), en vez de
-   aproximaciones. El umbral θ_W se define como una FRACCIÓN RELATIVA
+   resuelto con scipy.optimize.linprog (HiGHS), en vez de aproximaciones
+   (POT se descartó: sin wheels para Python 3.14 en Windows). El umbral θ_W se define como una FRACCIÓN RELATIVA
    del diámetro máximo del hipercubo de búsqueda (√D × rango_por_dim),
    en vez de un valor absoluto fijo. Esto se decidió tras observar
    numéricamente que W1 varía en un rango muy amplio (130 a 344, en el
    caso real PSO/DE sobre F11/D=20) y que un umbral relativo generaliza
    correctamente a las 12 funciones del benchmark CEC 2022, que tienen
    distintos rangos y dimensionalidades, sin necesitar recalibración
-   manual por función. θ_W = 0.25 (25% del diámetro máximo) fue elegido
-   tras verificar que los valores reales observados ocupan entre ~15% y
-   ~38% de esa escala: 25% bloquea las iteraciones tempranas (poblaciones
-   muy dispersas, fracción ~38%) pero permite la transferencia una vez
-   que ambos algoritmos convergen a regiones razonablemente cercanas
-   (fracción ~15-25%).
+   manual por función. θ_W = 0.6 (60% del diámetro máximo), recalibrado
+   en D-11 (2026-10-13). El valor original, 0.25, se eligió con el
+   evaluador opfunu (fracciones observadas ~15%-38%); con el CEC 2022
+   oficial (D-9) PSO y DE convergen a cuencas distintas (fracciones
+   0.31-0.63, constantes durante toda la corrida) y 0.25 dejaba sin
+   transferencias a 6/12 funciones en D=10 y 7/12 en D=20. Barrido
+   θ_W ∈ {0.25, 0.4, 0.6, ∞} (12 funciones × D∈{10,20} × 5 semillas,
+   MaxFES=5·10⁴): 0.25 fue peor que ∞ (20 peores / 5 mejores, Wilcoxon
+   p=0.02); 0.6 no se distingue de ∞ (0 mejores / 2 peores, p=0.5) y
+   conserva la barrera de la ecuación 7 para casos extremos.
 
 2. MMD: la heurística estándar de ancho de banda del kernel RBF (mediana
    de TODAS las distancias por pares, incluyendo pares entre los dos
@@ -51,15 +59,45 @@ especifica valores ni implementación concreta para ninguna de las dos):
    PSO y DE se vuelven más disímiles en FORMA (aunque su UBICACIÓN se
    acerque, que es lo que captura Wasserstein por separado).
 
-   El umbral de MMD se define de forma DINÁMICA, no como un número fijo:
-   se calcula un "ruido de muestreo de referencia" dividiendo la propia
-   población fuente en dos sub-muestras aleatorias y midiendo el MMD
-   entre ellas (que debería ser cercano a 0, ya que ambas mitades
-   provienen de la misma distribución). El umbral de rechazo se fija en
-   3x el percentil 95 de ese ruido de referencia, de modo que el filtro
-   se calibra automáticamente al tamaño y dispersión de cada población
-   fuente real, sin necesitar un valor fijo ajustado a mano por función
-   del benchmark.
+3. Filtro MMD POR INSTANCIA (corrección D-11, 2026-10-12). La versión
+   anterior comparaba con el objetivo el grupo formado por TODAS las
+   élites (permutadas), así que el MMD era idéntico para cada candidata
+   y el filtro aceptaba o rechazaba el lote entero; además su umbral
+   (3x P95 del MMD entre mitades de 15 de la fuente) no estaba en la
+   escala del valor comparado (5 élites contra 30 del objetivo), y
+   aceptaba aunque el objetivo fuera 2x más disperso. Ahora cada
+   instancia se evalúa sola, como masa puntual δ_x:
+
+       MMD²(δ_x, Pt) = 1 − 2·mean_t k(x, t) + mean k(Pt, Pt)
+
+   con x centrada en la media de la fuente y Pt en la suya (se mantiene
+   la semántica de forma, no ubicación).
+
+4. REFERENCIA EN EL OBJETIVO (corrección D-11, 2026-10-13). La primera
+   versión del filtro por instancia tomaba el ancho del kernel y el
+   umbral de la FUENTE (en Fase 2). Instrumentando 178 eventos de Canal B
+   reales se vio que, cuando la fuente ya convergió a un punto (66/178),
+   el ancho quedaba en ~1e-3, el kernel no "veía" al objetivo y todas las
+   élites daban el mismo valor (1 + 1/n): la decisión dependía solo de si
+   a la fuente le quedaba algún rezagado (29 lotes aprobados enteros, 37
+   rechazados enteros). Como la pregunta es "¿la instancia es típica del
+   OBJETIVO?", el ancho del kernel y el umbral salen ahora del objetivo,
+   en el momento del Canal B: ancho = mediana de distancias intra-
+   objetivo; umbral = MÁXIMO de MMD²(δ_t, Pt sin t) sobre los individuos
+   t del objetivo. Se rechaza una élite solo si es más atípica que
+   cualquier miembro real del objetivo. Solo el centro de la fuente (para
+   centrar las élites) se fija en Fase 2, porque las élites salen de esa
+   fuente. Con la fuente colapsada pasan a aprobarse 64/66 lotes; con
+   escalas comparables el comportamiento casi no cambia (80/7 contra
+   82/6 lotes aprobados/rechazados enteros).
+
+   Objetivo colapsado: si la dispersión del objetivo (RMS de la distancia
+   a su centroide) es menor que FRACCION_COLAPSO_MMD × diámetro, el
+   objetivo no tiene forma con la que comparar y el filtro se declara NO
+   APLICABLE: aprueba todas las instancias (la ubicación ya la controló
+   Wasserstein) y el orquestador lo registra. Rechazar en ese caso
+   bloqueaba el Canal B justo cuando el objetivo está estancado, y un
+   ancho mínimo del kernel no lo resolvía (rechazaba aún más).
 """
 
 from dataclasses import dataclass
@@ -72,12 +110,18 @@ from scipy.spatial.distance import cdist
 # Configuración de la barrera de seguridad.
 # ----------------------------------------------------------------------
 
-FRACCION_UMBRAL_WASSERSTEIN = 0.25   # θ_W como fracción del diámetro
+FRACCION_UMBRAL_WASSERSTEIN = 0.6    # θ_W como fracción del diámetro
                                        # máximo del espacio de búsqueda
-N_SUBMUESTRAS_REFERENCIA_MMD = 50     # repeticiones para estimar el
-                                        # ruido de muestreo de referencia
-MULTIPLO_UMBRAL_MMD = 3.0             # umbral = 3x percentil 95 del ruido
-PERCENTIL_REFERENCIA_MMD = 95
+FRACCION_COLAPSO_MMD = 1e-3          # dispersión del objetivo bajo la cual
+                                       # el filtro MMD no es aplicable
+
+
+@dataclass
+class ReferenciaMMD:
+    """Lo que el filtro MMD fija en Fase 2 (ver docstring del módulo,
+    puntos 3 y 4): solo el centro de la fuente, para centrar las élites.
+    El ancho del kernel y el umbral se calculan con el objetivo en Canal B."""
+    centro: np.ndarray     # media de la población fuente (n_dimensiones,)
 
 
 @dataclass
@@ -257,87 +301,101 @@ def calcular_mmd(poblacion_a: np.ndarray, poblacion_b: np.ndarray,
     return float(kxx + kyy - 2 * kxy)
 
 
-def calcular_umbral_mmd_dinamico(
-    poblacion_fuente: np.ndarray,
-    n_submuestras: int = N_SUBMUESTRAS_REFERENCIA_MMD,
-    percentil: float = PERCENTIL_REFERENCIA_MMD,
-    multiplo: float = MULTIPLO_UMBRAL_MMD,
-    semilla: int = 0,
-) -> float:
+def calcular_mmd_instancias(instancias: np.ndarray,
+                              centro_fuente: np.ndarray,
+                              poblacion_objetivo: np.ndarray,
+                              gamma: float) -> np.ndarray:
     """
-    Calcula el umbral dinámico de rechazo por MMD (ver justificación
-    completa en el docstring del módulo): divide la población fuente en
-    dos mitades aleatorias repetidamente, mide el MMD entre ellas (ruido
-    de muestreo puro, sin diferencia real de distribución), y fija el
-    umbral en `multiplo` veces el percentil indicado de esa distribución
-    de referencia.
+    MMD² entre cada instancia (como masa puntual δ_x) y la población
+    objetivo, con la instancia centrada en `centro_fuente` y el objetivo en
+    su propia media (compara forma, no ubicación):
+
+        MMD²(δ_x, Pt) = k(x,x) − 2·mean_t k(x,t) + mean k(Pt,Pt)
+
+    con k(x,x) = 1 en el kernel RBF. Retorna un valor por instancia.
     """
-    rng = np.random.default_rng(semilla)
-    n = len(poblacion_fuente)
-    valores_referencia = []
+    x_centrado = instancias - centro_fuente
+    t_centrado = poblacion_objetivo - poblacion_objetivo.mean(axis=0)
+    kyy = _kernel_rbf(t_centrado, t_centrado, gamma).mean()
+    kxy = _kernel_rbf(x_centrado, t_centrado, gamma).mean(axis=1)
+    return 1.0 - 2.0 * kxy + kyy
 
-    for _ in range(n_submuestras):
-        indices = rng.permutation(n)
-        mitad_1 = poblacion_fuente[indices[: n // 2]]
-        mitad_2 = poblacion_fuente[indices[n // 2:]]
-        valores_referencia.append(calcular_mmd(mitad_1, mitad_2))
 
-    percentil_referencia = np.percentile(valores_referencia, percentil)
-    return float(multiplo * percentil_referencia)
+def calcular_referencia_mmd(poblacion_fuente: np.ndarray) -> ReferenciaMMD:
+    """
+    Fija en Fase 2 lo que el filtro necesita de la fuente: su centro, para
+    centrar las élites (que salen de la fuente de ese momento). El ancho
+    del kernel y el umbral NO se fijan aquí: dependen del objetivo y se
+    calculan en Canal B (ver docstring del módulo, punto 4).
+    """
+    return ReferenciaMMD(centro=poblacion_fuente.mean(axis=0))
+
+
+def calcular_dispersion(poblacion: np.ndarray) -> float:
+    """Dispersión de una población: RMS de la distancia a su centroide."""
+    centrada = poblacion - poblacion.mean(axis=0)
+    return float(np.sqrt((centrada ** 2).sum(axis=1).mean()))
+
+
+def objetivo_colapsado(poblacion_objetivo: np.ndarray, limites: np.ndarray,
+                       fraccion: float = FRACCION_COLAPSO_MMD) -> bool:
+    """
+    True si el objetivo convergió a un punto (dispersión menor que
+    `fraccion` × diámetro del espacio): no tiene forma con la que comparar
+    y el filtro MMD no es aplicable (ver docstring del módulo, punto 4).
+    """
+    return (calcular_dispersion(poblacion_objetivo)
+            < fraccion * calcular_diametro_maximo(limites))
+
+
+def calcular_umbral_mmd_objetivo(poblacion_objetivo: np.ndarray,
+                                  gamma: float) -> float:
+    """
+    Umbral del filtro: máximo de MMD²(δ_t, Pt sin t) sobre los individuos t
+    del objetivo — la misma estadística que se aplica a las élites, medida
+    sobre miembros reales del objetivo (leave-one-out).
+    """
+    centro_objetivo = poblacion_objetivo.mean(axis=0)
+    nulo = [
+        calcular_mmd_instancias(
+            poblacion_objetivo[j:j + 1], centro_objetivo,
+            np.delete(poblacion_objetivo, j, axis=0), gamma,
+        )[0]
+        for j in range(len(poblacion_objetivo))
+    ]
+    return float(np.max(nulo))
 
 
 def filtrar_instancias_por_mmd(
     instancias_candidatas: np.ndarray,
     poblacion_fuente: np.ndarray,
     poblacion_objetivo: np.ndarray,
-    umbral_precalculado: float = None,
+    limites: np.ndarray,
+    referencia: ReferenciaMMD = None,
 ) -> np.ndarray:
     """
-    Filtro fino de la Fase 2/3 (ecuación de salida de la sección 4.2.2:
-    "L_instancias ordenadas por ϕ+MMD"): para cada instancia candidata,
-    se evalúa si su distribución es compatible con la del algoritmo
-    objetivo, usando MMD como medida de discrepancia.
+    Filtro fino de la Fase 3 (ecuación de salida de la sección 4.2.2:
+    "L_instancias ordenadas por ϕ+MMD"): decide POR INSTANCIA si cada
+    candidata es típica de la distribución del objetivo (ver docstring del
+    módulo, puntos 3 y 4). Ancho del kernel y umbral salen del objetivo;
+    las candidatas se centran en el centro de la fuente.
 
-    CORRECCIÓN DE IMPLEMENTACIÓN (bug detectado y documentado): la
-    versión original construía el grupo de comparación replicando la
-    instancia individual con np.tile() (30 copias idénticas). Eso
-    genera un grupo con VARIANZA INTERNA CERO, lo cual rompe el cálculo
-    de MMD de forma sistemática: el término Kxx (kernel de la instancia
-    contra sí misma) se vuelve trivialmente 1.0 en todos los elementos,
-    inflando artificialmente la discrepancia frente a cualquier
-    distribución real con varianza normal. Se verificó que incluso
-    instancias tomadas literalmente de la propia población objetivo
-    eran rechazadas con ese método, lo que confirma el defecto.
+    Si se provee `referencia` (calculada en la extracción, Fase 2), se usa
+    su centro; si no, se toma el de `poblacion_fuente`. Canal B debe pasar
+    la de Fase 2: las élites provienen de la fuente de ese momento.
 
-    DECISIÓN ACORDADA (Opción 3): en vez de replicar la instancia sola,
-    se construye el grupo de comparación combinando la instancia
-    candidata con el CONJUNTO COMPLETO de instancias de élite disponibles
-    (instancias_candidatas). Esto aprovecha la varianza genuina que ya
-    existe entre las instancias de élite extraídas por FastSHAP en la
-    Fase 2, sin introducir ningún parámetro nuevo ni muestras sintéticas.
-    El grupo resultante tiene varianza real y un tamaño razonable para
-    que el kernel MMD funcione correctamente.
+    Si el objetivo está colapsado (`objetivo_colapsado`), el filtro no es
+    aplicable y aprueba todas las instancias.
 
-    Retorna un array booleano indicando cuáles instancias pasan el filtro
-    (MMD del grupo que las incluye, respecto a la población objetivo, por
-    debajo del umbral). Si se provee umbral_precalculado (calculado en el
-    momento de la extracción en Fase 2), se usa directamente en vez de
-    recalcularlo con la población fuente actual — que puede haber convergido
-    más desde entonces, produciendo un umbral que no refleja la distribución
-    del fuente en el momento relevante.
+    Retorna un array booleano: True si la instancia pasa el filtro.
     """
-    umbral = (umbral_precalculado
-              if umbral_precalculado is not None
-              else calcular_umbral_mmd_dinamico(poblacion_fuente))
-
-    aprobadas = np.zeros(len(instancias_candidatas), dtype=bool)
-    for i in range(len(instancias_candidatas)):
-        otras_instancias = np.delete(instancias_candidatas, i, axis=0)
-        grupo_con_varianza = np.vstack([
-            instancias_candidatas[i:i+1],
-            otras_instancias,
-        ])
-        mmd_instancia = calcular_mmd(grupo_con_varianza, poblacion_objetivo)
-        aprobadas[i] = mmd_instancia <= umbral
-
-    return aprobadas
+    if objetivo_colapsado(poblacion_objetivo, limites):
+        return np.ones(len(instancias_candidatas), dtype=bool)
+    if referencia is None:
+        referencia = calcular_referencia_mmd(poblacion_fuente)
+    objetivo_centrado = poblacion_objetivo - poblacion_objetivo.mean(axis=0)
+    gamma = _calcular_gamma_intra_grupo(objetivo_centrado, objetivo_centrado)
+    umbral = calcular_umbral_mmd_objetivo(poblacion_objetivo, gamma)
+    valores = calcular_mmd_instancias(
+        instancias_candidatas, referencia.centro, poblacion_objetivo, gamma)
+    return valores <= umbral

@@ -2,12 +2,17 @@
 Corre todo el análisis (setup §6-§9) de punta a punta: rankings,
 estadística (Friedman/Shaffer/Wilcoxon/desviación), diagramas CD de
 Nemenyi, figuras y tablas restantes (barras por MaxFES, suplementario,
-diagnósticos §9).
+diagnósticos §9) y gráficos de convergencia.
 
 Uso:
     python analisis/main.py [--corridas resultados/corridas.parquet]
                             [--propuesto resultados/corridas_propuesto.parquet]
                             [--salida resultados/analisis]
+                            [--convergencia-por-semilla]
+
+Las figuras de convergencia por semilla (4 896) solo se generan con
+`--convergencia-por-semilla`; para más opciones (magnitud fitness, un
+subconjunto de semillas) usar directamente `analisis/convergencia.py`.
 
 Salida: `<salida>/tablas/*.csv` y `<salida>/figuras/*.png`.
 """
@@ -21,7 +26,7 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 
-from analisis import cd_nemenyi, estadistica, figuras, rankings
+from analisis import cd_nemenyi, convergencia, estadistica, figuras, rankings
 
 
 def main() -> None:
@@ -29,22 +34,27 @@ def main() -> None:
     ap.add_argument("--corridas", default="resultados/corridas.parquet")
     ap.add_argument("--propuesto", default="resultados/corridas_propuesto.parquet")
     ap.add_argument("--salida", default="resultados/analisis")
+    ap.add_argument("--convergencia-por-semilla", action="store_true")
     args = ap.parse_args()
 
     dir_tablas = Path(args.salida) / "tablas"
     dir_figuras = Path(args.salida) / "figuras"
 
-    print("== 1/4 Rankings (§6) ==")
+    print("== 1/5 Rankings (§6) ==")
     rankings.generar_todos(args.corridas, dir_tablas)
 
-    print("== 2/4 Estadística: Friedman + Shaffer + Wilcoxon + desviación (§7) ==")
+    print("== 2/5 Estadística: Friedman + Shaffer + Wilcoxon + desviación (§7) ==")
     estadistica.generar_todos(args.corridas, dir_tablas)
 
-    print("== 3/4 Diagramas de Diferencia Crítica — Nemenyi (§7-§8) ==")
+    print("== 3/5 Diagramas de Diferencia Crítica — Nemenyi (§7-§8) ==")
     cd_nemenyi.generar_todos(args.corridas, dir_figuras)
 
-    print("== 4/4 Barras por MaxFES + suplementario + diagnósticos §9 ==")
+    print("== 4/5 Barras por MaxFES + suplementario + diagnósticos §9 ==")
     figuras.generar_todos(args.corridas, args.propuesto, dir_tablas, dir_figuras)
+
+    print("== 5/5 Gráficos de convergencia (§8) ==")
+    convergencia.generar_todos(args.corridas, args.salida,
+                               por_semilla=args.convergencia_por_semilla)
 
     print(f"\nListo. Tablas en {dir_tablas}/, figuras en {dir_figuras}/")
 

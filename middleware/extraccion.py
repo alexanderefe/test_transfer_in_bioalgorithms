@@ -41,6 +41,7 @@ ser compatible con la interfaz que exige MarginalImputer.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
@@ -49,7 +50,7 @@ import xgboost as xgb
 from middleware.xgboost_wrapper import XGBoostWrapper
 from fastshap_lib.fastshap import FastSHAP
 from fastshap_lib.tabular_imputers import MarginalImputer
-from middleware.barrera_seguridad import calcular_umbral_mmd_dinamico
+from middleware.barrera_seguridad import ReferenciaMMD, calcular_referencia_mmd
 
 
 # ----------------------------------------------------------------------
@@ -108,16 +109,15 @@ class ResultadoExtraccion:
     valores_shapley_elite: np.ndarray     # (k, n_dimensiones) — ϕ por variable
     parametros_escape: dict                # configuración en momentos de escape
     r2_modelo_subrogado: float             # calidad del XGBoost (validación)
-    transferencia_bloqueada_por_r2: bool = False  # True cuando R²≤0
-    umbral_mmd_precalculado: float = 0.0  # umbral MMD calculado en el momento
-                                           # de la extracción (Fase 2), con la
-                                           # población del fuente tal como estaba
-                                           # entonces. Canal B DEBE usar este
-                                           # umbral, no recalcularlo después
-                                           # (la población del fuente puede haber
-                                           # convergido más entre Fase 2 y Canal B,
-                                           # produciendo un umbral artificialmente
-                                           # alto que aprueba todo o bajo que rechaza todo)
+    transferencia_bloqueada_por_r2: bool = False  # True cuando R²<0
+    referencia_mmd: Optional[ReferenciaMMD] = None  # centro de la fuente en
+                                           # el momento de la extracción (Fase 2),
+                                           # para centrar las élites en el filtro
+                                           # MMD. Canal B DEBE usar esta
+                                           # referencia, no recalcularla después:
+                                           # las élites salieron de esa fuente, que
+                                           # puede haberse movido desde entonces.
+                                           # Ancho y umbral salen del objetivo (D-11)
 
 
 def entrenar_modelo_subrogado(
@@ -137,9 +137,10 @@ def entrenar_modelo_subrogado(
         sino el fitness real de cada individuo, necesario para tener
         variedad de pares (x, fitness) con los que entrenar XGBoost).
 
-    Retorna el modelo entrenado y su R² de validación, para verificar
-    que cumple el criterio de aceptación definido para esta fase
-    (R² > 0.7 sobre datos de validación separados del entrenamiento).
+    Retorna el modelo entrenado y su R² de validación (datos separados del
+    entrenamiento). El middleware bloquea la transferencia solo si R² < 0
+    (ver extraer_conocimiento); el R² > 0.7 del plan metodológico original
+    no se aplica en el código.
     """
     ventana_poblacion = historial_poblacional[-ventana:]
     ventana_fitness = historial_fitness_individual[-ventana:]
@@ -274,9 +275,9 @@ def extraer_conocimiento(
         historial_poblacional, historial_fitness_individual
     )
 
-    # Cortocircuito: si R²=0 (varianza del fitness≈0), no tiene sentido
-    # entrenar FastSHAP. Se retorna un resultado marcado como bloqueado
-    # con arrays vacíos/zeros que el orquestador ignorará completamente.
+    # Cortocircuito: si R² < 0 (el subrogado es peor que predecir la media),
+    # no tiene sentido entrenar FastSHAP. Se retorna un resultado marcado
+    # como bloqueado con arrays de ceros que el orquestador ignora.
     if r2 < 0.0:
         n_dim = historial_poblacional[-1].shape[1] if historial_poblacional else 1
         dummy = np.zeros((top_k, n_dim))
@@ -392,13 +393,11 @@ def extraer_conocimiento(
     # modelar. R²=0 exacto ya no bloquea — puede tener algo de señal débil.
     bloqueada = r2 < 0.0
 
-    # Calcular el umbral MMD usando la población del fuente TAL COMO ESTÁ
-    # en este momento (Fase 2). Este valor se guarda para que Canal B lo
-    # use directamente, sin recalcularlo más tarde cuando la población del
-    # fuente puede haber convergido más (produciendo un umbral que no refleja
-    # la distribución real al momento de la extracción).
+    # Fijar el centro de la fuente TAL COMO ESTÁ en este momento (Fase 2),
+    # del que salen las élites. Se guarda para que Canal B lo use
+    # directamente, sin recalcularlo cuando la fuente ya se movió.
     poblacion_fuente_actual = historial_poblacional[-1]
-    umbral_mmd = calcular_umbral_mmd_dinamico(poblacion_fuente_actual)
+    referencia_mmd = calcular_referencia_mmd(poblacion_fuente_actual)
 
     return ResultadoExtraccion(
         instancias_elite=instancias_elite,
@@ -407,7 +406,7 @@ def extraer_conocimiento(
         parametros_escape=parametros_escape,
         r2_modelo_subrogado=r2,
         transferencia_bloqueada_por_r2=bloqueada,
-        umbral_mmd_precalculado=umbral_mmd,
+        referencia_mmd=referencia_mmd,
     )
 
 

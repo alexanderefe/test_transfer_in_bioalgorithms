@@ -45,6 +45,7 @@ resultados/corridas_propuesto/
 resultados/logs_middleware/
 resultados/fallos/
 tests/_tmp_resultados/
+Avance 1/
 
 # Archivo basura de una redirección de shell fallida (pip ... 'tqdm>=4.65')
 /4.65

@@ -7,13 +7,13 @@ esquemas §11.2 (todos los algoritmos) y §11.3 (solo el propuesto).
     fila, fila_prop = correr_corrida("middleware", funcion=11, dim=20,
                                      max_fes=120_000, idx_semilla=0)
 
-Algoritmos disponibles (decisión D-4, docs/configuracion_experimental.md):
+Algoritmos disponibles (docs/configuracion_experimental.md):
   - "middleware": PSO fuente + DE objetivo + orquestador (el propuesto).
-  - "pso": PSO SOLO, sin middleware, con la misma configuración congelada.
-  - "de":  DE SOLO, sin middleware, con la misma configuración congelada.
-No hay competidores externos: el experimento se programó desde el inicio
-alrededor de PSO y DE, y añadir más algoritmos dispararía aún más el tiempo
-de cómputo, ya alto solo con el propuesto.
+  - "pso": PSO SOLO, sin middleware, con la misma configuración congelada (D-4).
+  - "de":  DE SOLO, sin middleware, con la misma configuración congelada (D-4).
+  - "cmaes", "madde", "nlshadersp": competidores externos (D-8) —
+    IPOP-CMA-ES, MadDE y NL-SHADE-RSP, corriendo solos como caja negra con
+    los parámetros de sus autores (ver `experimentos/competidores/`).
 """
 
 from __future__ import annotations
@@ -27,11 +27,13 @@ from pathlib import Path
 import numpy as np
 
 from problems.cec2022_wrapper import ProblemaCEC2022
+from problems.cec2022_numba import VERSION_EVALUADOR
 from bioalgorithms.pso import PSO
 from bioalgorithms.de import DE
 from middleware.orquestador import Orquestador
 from middleware.extraccion import EPOCHS_EXPLAINER
 from experimentos.semillas import SEMILLAS
+from experimentos.competidores import COMPETIDORES
 from experimentos import esquema
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -42,9 +44,12 @@ _PSO_KW = dict(w_max=0.9, w_min=0.4, c1=2.0, c2=2.0)
 _DE_KW = dict(F=0.2, CR=0.3)
 
 
-def _version(backend: str = "numba") -> str:
+def _version(backend: str = VERSION_EVALUADOR, algoritmo: str = "") -> str:
     """Marca de versión para reproducibilidad (§10): commit corto de git +
-    backend del evaluador CEC2022 (D-5, docs/configuracion_experimental.md)."""
+    evaluador CEC2022 (D-5/D-9, docs/configuracion_experimental.md: desde
+    D-9 "numba-c22oficial"; grid.py y analisis/ la usan para no mezclar
+    corridas del evaluador viejo) + versión de la implementación del
+    competidor externo, si lo es (D-8)."""
     try:
         h = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -53,7 +58,10 @@ def _version(backend: str = "numba") -> str:
         commit = h.stdout.strip() or "sin-git"
     except Exception:
         commit = "sin-git"
-    return f"git:{commit}|eval:{backend}"
+    version = f"git:{commit}|eval:{backend}"
+    if algoritmo in COMPETIDORES:
+        version += f"|alg:{COMPETIDORES[algoritmo][0].VERSION}"
+    return version
 
 
 def _correr_middleware(problema: ProblemaCEC2022, dim: int, max_fes: int,
@@ -107,10 +115,26 @@ def _correr_algoritmo_solo(clase_alg, kwargs_alg):
     return _runner
 
 
+def _correr_competidor(modulo):
+    """
+    Fábrica de runners para un competidor externo (D-8): caja negra
+    `modulo.correr(problema, max_fes, semilla)` que corta exactamente en
+    MaxFES (`experimentos/competidores/base.py`), con la semilla de la
+    corrida directa, igual que PSO/DE solos.
+    """
+    def _runner(problema, dim, max_fes, semilla, max_epochs_fastshap,
+               dir_logs, run_id):
+        modulo.correr(problema, max_fes, semilla)
+        return None, ""  # sin ResumenEjecucion ni log JSON (no hay middleware)
+    return _runner
+
+
 _RUNNERS = {
     "middleware": _correr_middleware,
     "pso": _correr_algoritmo_solo(PSO, _PSO_KW),
     "de": _correr_algoritmo_solo(DE, _DE_KW),
+    **{nombre: _correr_competidor(modulo)
+       for nombre, (modulo, _, _) in COMPETIDORES.items()},
 }
 
 
@@ -128,7 +152,7 @@ def correr_corrida(algoritmo: str, funcion: int, dim: int, max_fes: int,
     if algoritmo not in _RUNNERS:
         raise KeyError(
             f"Algoritmo '{algoritmo}' no reconocido. Disponibles: "
-            f"{sorted(_RUNNERS)} (decisión D-4: sin competidores externos)."
+            f"{sorted(_RUNNERS)} (D-4 / D-8)."
         )
 
     dir_salida = Path(dir_salida)
@@ -137,7 +161,7 @@ def correr_corrida(algoritmo: str, funcion: int, dim: int, max_fes: int,
     meta = {
         "algoritmo": algoritmo, "funcion": funcion, "dim": dim,
         "max_fes": max_fes, "idx_semilla": idx_semilla, "semilla": semilla,
-        "version": _version(),
+        "version": _version(algoritmo=algoritmo),
     }
     host = socket.gethostname()
 
@@ -157,7 +181,7 @@ def correr_corrida(algoritmo: str, funcion: int, dim: int, max_fes: int,
         )
         # La fila §11.3 (diagnósticos del middleware) solo existe cuando hubo
         # un ResumenEjecucion real, es decir, para "middleware". PSO/DE solos
-        # devuelven resumen=None (ver _correr_algoritmo_solo).
+        # y los competidores externos devuelven resumen=None.
         fila_prop = None
         if resumen is not None:
             fila_prop = esquema.fila_propuesto(

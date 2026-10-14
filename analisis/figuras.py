@@ -25,7 +25,8 @@ from analisis.rankings import ranking_configuracion
 
 def listar_figuras(dir_figuras: str | Path = "resultados/analisis/figuras") -> list[Path]:
     """Todas las figuras PNG generadas por `analisis/`, en orden estable
-    (alfabético: primero los 8 CD, después las 2 de barras)."""
+    (alfabético: barras, CD y paneles de convergencia; las figuras por
+    función y por semilla, en subcarpetas, no se incluyen)."""
     return sorted(Path(dir_figuras).glob("*.png"))
 
 
@@ -61,17 +62,19 @@ def barras_rangos_por_maxfes(df: pd.DataFrame, dim: int, ruta_salida: Path) -> N
             datos[a].append(ranking.loc[a, ("resumen", "rango_promedio")])
 
     x = range(len(MAXFES))
-    ancho = 0.25
-    fig, ax = plt.subplots(figsize=(7, 4))
+    k = len(ALGORITMOS)
+    ancho = 0.8 / k
+    fig, ax = plt.subplots(figsize=(9, 4))
     for i, a in enumerate(ALGORITMOS):
-        pos = [xi + (i - 1) * ancho for xi in x]
+        pos = [xi + (i - (k - 1) / 2) * ancho for xi in x]
         ax.bar(pos, datos[a], width=ancho, label=NOMBRE_ALGORITMO.get(a, a))
     ax.set_xticks(list(x))
     ax.set_xticklabels([f"{m:,}".replace(",", ".") for m in MAXFES])
     ax.set_xlabel("MaxFES")
     ax.set_ylabel("Rango promedio (1=mejor)")
     ax.set_title(f"Rango promedio por MaxFES — CEC2022_{dim}")
-    ax.legend()
+    ax.legend(fontsize=8, ncol=len(ALGORITMOS), loc="upper center",
+              bbox_to_anchor=(0.5, -0.15), frameon=False)
     ax.invert_yaxis()
     fig.tight_layout()
     fig.savefig(ruta_salida, dpi=150)

@@ -76,14 +76,14 @@ def tabla_posiciones_finales(df: pd.DataFrame) -> pd.DataFrame:
 
     Columnas:
     - `rango_promedio_<algoritmo>`: el número crudo (1.0 = mejor posible,
-      3.0 = peor posible con 3 algoritmos). Es el promedio, sobre las 12
-      funciones del conjunto, del rango 1..3 que ese algoritmo obtuvo en
+      6.0 = peor posible con 6 algoritmos). Es el promedio, sobre las 12
+      funciones del conjunto, del rango 1..6 que ese algoritmo obtuvo en
       CADA función (ver `rankear_columna` — con empate si dos algoritmos
       difieren en < 1e-8 en el error medio, convención CEC 2017). Un
       1.083 significa: en 11 de las 12 funciones fue 1º, y en 1 fue 2º
       ((11·1 + 1·2)/12 = 1.083); no es un promedio de errores, es un
       promedio de POSICIONES.
-    - `puesto_1`, `puesto_2`, `puesto_3`: qué algoritmo(s) ocuparon
+    - `puesto_1` … `puesto_6`: qué algoritmo(s) ocuparon
       cada puesto una vez ordenados por `rango_promedio` (con el valor
       entre paréntesis) — la misma información que las columnas
       anteriores, pero legible de un vistazo sin tener que comparar
@@ -108,10 +108,15 @@ def tabla_posiciones_finales(df: pd.DataFrame) -> pd.DataFrame:
 LEEME_METODOLOGIA = """\
 # Cómo leer `resultados/analisis/`
 
-Todo lo de esta carpeta sale de `resultados/corridas.parquet` (14 688
-corridas: 3 algoritmos × 2 dimensionalidades × 4 MaxFES × 12 funciones ×
+Todo lo de esta carpeta sale de `resultados/corridas.parquet` (29 376
+corridas: 6 algoritmos × 2 dimensionalidades × 4 MaxFES × 12 funciones ×
 51 semillas), calculado por `analisis/` — ver `docs/setup_experimental.md`
 §6-§9 para el protocolo completo. Nada de esto re-ejecuta ninguna corrida.
+
+Los 6 algoritmos: el propuesto (`middleware`), sus dos algoritmos base
+corriendo solos (`pso`, `de`, D-4) y tres competidores externos
+(`cmaes` = IPOP-CMA-ES, `madde` = MadDE, `nlshadersp` = NL-SHADE-RSP, D-8;
+ver `docs/configuracion_experimental.md`).
 
 ## `tablas/posiciones_finales.csv` — tabla resumen (§8)
 
@@ -120,8 +125,8 @@ Una fila por cada una de las **8 configuraciones** (2 dimensionalidades ×
 
 1. Se calcula el **error medio** de las 51 corridas de cada algoritmo,
    por separado en cada una de las 12 funciones CEC2022.
-2. En cada función, se **ordenan los 3 algoritmos** de menor a mayor
-   error medio y se les asigna un rango: 1 = mejor (menor error), 3 =
+2. En cada función, se **ordenan los 6 algoritmos** de menor a mayor
+   error medio y se les asigna un rango: 1 = mejor (menor error), 6 =
    peor. Si dos algoritmos difieren en menos de 1e-8 en su error medio,
    se consideran empatados y ambos reciben el **rango promedio** de las
    posiciones que ocupan (p. ej. empate en 1º-2º → ambos con rango 1.5;
@@ -129,8 +134,8 @@ Una fila por cada una de las **8 configuraciones** (2 dimensionalidades ×
 3. El **rango promedio** de un algoritmo (columnas `rango_promedio_*`)
    es el promedio de esos 12 rangos (uno por función) — NO es un
    promedio de errores, es un promedio de *posiciones*. Va de 1.0 (fue
-   1º en las 12 funciones) a 3.0 (fue 3º en las 12).
-4. Las columnas `puesto_1`, `puesto_2`, `puesto_3` muestran directamente qué algoritmo
+   1º en las 12 funciones) a 6.0 (fue 6º en las 12).
+4. Las columnas `puesto_1` … `puesto_6` muestran directamente qué algoritmo
    quedó en cada lugar en esa configuración, con su rango promedio entre
    paréntesis.
 
@@ -142,19 +147,19 @@ El detalle función por función de cada uno está en
 ## `tablas/friedman.csv` — setup §7
 
 Por configuración: test de Friedman sobre la matriz de rangos (12
-funciones × 3 algoritmos). H0 = "los 3 algoritmos tienen el mismo rango
+funciones × 6 algoritmos). H0 = "los 6 algoritmos tienen el mismo rango
 promedio". Dos columnas dicen lo mismo de dos formas:
 
 - `rechaza_h0` (booleano): `True` si `p_valor < 0.05`.
 - `conclusion` (texto): la misma lectura en palabras — si se rechaza H0
   hay evidencia de que **al menos un algoritmo difiere** de los otros
   (no dice todavía cuál — para eso está el post-hoc de Shaffer, más
-  abajo); si NO se rechaza, no hay evidencia suficiente de que los 3
+  abajo); si NO se rechaza, no hay evidencia suficiente de que los 6
   algoritmos se comporten distinto en esa configuración.
 
 ## `tablas/shaffer_d*.csv` y `shaffer_pct_significativo.csv` — setup §7
 
-Comparación por pares (middleware-pso, middleware-de, pso-de) con el
+Las 15 comparaciones por pares entre los 6 algoritmos, con el
 ajuste de Shaffer (controla mejor el error tipo I que comparar cada par
 sin ajustar). `significativo=True` (p_ajustado < 0.05) → esos dos
 algoritmos tienen desempeño distinguible en esa configuración.
@@ -164,23 +169,22 @@ participa el propuesto salieron significativas.
 ## `tablas/wilcoxon_bew.csv` — setup §7 (extendido)
 
 Test de Wilcoxon de rangos con signo, **emparejado por semilla**, por
-función — para las 3 comparaciones por pares (middleware vs pso,
-middleware vs de, y pso vs de, esta última agregada más allá del setup
-original para caracterizar también la diferencia entre los dos
-algoritmos base). El veredicto (`better`/`equal`/`worse`) se lee desde
+función — el propuesto contra cada uno de los otros 5 algoritmos
+(setup §7), más pso vs de (agregada más allá del setup original para
+caracterizar también la diferencia entre los dos algoritmos base). El veredicto (`better`/`equal`/`worse`) se lee desde
 la perspectiva de `algoritmo_a`: contando sobre las 12 funciones, cuántas
 veces `algoritmo_a` fue significativamente mejor, no distinguible, o
 significativamente peor que `algoritmo_b`.
 
 ## `tablas/desviacion_rangos.csv` — setup §7
 
-Desviación estándar de los 3 `rango_promedio` de esa configuración —
-qué tan dispersos quedaron los algoritmos entre sí (0 = los 3 empatados
+Desviación estándar de los 6 `rango_promedio` de esa configuración —
+qué tan dispersos quedaron los algoritmos entre sí (0 = los 6 empatados
 en promedio; más alto = más separados).
 
 ## `figuras/cd_d*.png` — Diagramas de Diferencia Crítica (Nemenyi)
 
-Un diagrama por configuración. Eje horizontal = rango promedio (1 a 3).
+Un diagrama por configuración. Eje horizontal = rango promedio (1 a 6).
 Cada algoritmo marcado en su posición. Una barra horizontal conecta a
 los algoritmos cuya diferencia de rango es menor que la Diferencia
 Crítica (CD, indicada en el título) — esos algoritmos NO son
@@ -190,9 +194,29 @@ marcó significativo).
 
 ## `figuras/barras_rangos_d{10,20}.png`
 
-Rango promedio de los 3 algoritmos a través de los 4 valores de MaxFES,
+Rango promedio de los 6 algoritmos a través de los 4 valores de MaxFES,
 uno por dimensionalidad — para ver de un vistazo si el propuesto mejora,
 empeora o se mantiene según el presupuesto de evaluaciones.
+
+## `figuras/convergencia_d*.png` y `figuras/convergencia/` — gráficos de convergencia
+
+Mejor error visto hasta cada momento (best-so-far, f − f(x*)) contra las
+evaluaciones consumidas (FES), ambos ejes en escala log, sacado de la
+traza `error_checkpoints` de cada corrida (120 puntos: 20 logarítmicos
+entre 10⁻⁴ y 10⁻² de MaxFES y uno por cada 1 % de MaxFES). Errores
+< 1e-8 se dibujan en 1e-8.
+
+- `convergencia_d{10,20}_fes*.png`: un panel por configuración con las 12
+  funciones. Línea = mediana de las 51 semillas; banda = rango
+  intercuartil (percentiles 25-75). El propuesto va en rojo y más grueso.
+- `convergencia/d*_fes*/fNN.png`: lo mismo, una figura por función.
+- `convergencia/d*_fes*/semillas/fNN_sSS.png` (solo con
+  `--convergencia-por-semilla`): la curva de cada algoritmo en una semilla.
+- Con `analisis/convergencia.py --magnitud fitness`, las mismas figuras
+  en valor objetivo f (= f(x*) + error), con sufijo `_fitness`.
+- `tablas/convergencia_medianas.csv`: las curvas agregadas en números
+  (q1, mediana y q3 del error, y fitness mediano), por (dim × MaxFES ×
+  función × algoritmo × checkpoint), para re-graficarlas fuera de Python.
 
 ## `tablas/suplementario_media_mediana_std.csv`
 
@@ -263,7 +287,7 @@ def main():
     ), "la tabla debe venir ordenada por rango promedio ascendente"
 
     print("\nTabla de posiciones finales (con puestos legibles):")
-    cols = ["dim", "max_fes", "puesto_1", "puesto_2", "puesto_3"]
+    cols = ["dim", "max_fes"] + [f"puesto_{i}" for i in range(1, len(ALGORITMOS) + 1)]
     print(salidas["posiciones_finales"][cols].to_string(index=False))
     print("\n[OK] rankings.py")
 

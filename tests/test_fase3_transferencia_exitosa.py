@@ -1,16 +1,25 @@
 """
 Validación de transferencia exitosa con filtro MMD aprobado.
 
-Usa dos variantes de PSO sobre F1/D=10: una bien afinada (fuente, converge
+Usa dos variantes de PSO sobre F2/D=10: una bien afinada (fuente, converge
 bien) y otra mal afinada (objetivo, se estanca). Al ser la misma familia
-de algoritmo, sus poblaciones convergen con formas de distribución similares
-(misma escala de dispersión al centrar), por lo que el filtro MMD las
-considera compatibles y permite la inyección de instancias de élite.
+de algoritmo, sus poblaciones convergen con formas de distribución similares,
+por lo que el filtro MMD considera típicas del objetivo a las instancias de
+élite y permite inyectarlas.
 
-Este test complementa test_fase3_transferencia.py, que demostró el
-funcionamiento correcto de la BARRERA (rechazo por incompatibilidad real
-entre PSO y DE), verificando aquí que el sistema también permite la
-transferencia cuando la compatibilidad sí existe.
+Escenario: hasta D-9 era F1/D=10, pero con el Zakharov oficial el PSO "bien
+afinado" termina peor que el "mal afinado" (6901 contra 2555) y no se activa
+ningún ciclo. Se buscó en las 12 funciones con D ∈ {10, 20} (D-11): la
+premisa y los tres criterios se cumplen en 16 de 24 casos; se eligió F2/D=10
+(fuente 433 contra objetivo 469 al final, primer ciclo en la iteración 51,
+sin bloqueos por R² ni rechazos del MMD). `correr_escenario(f, d)` permite
+repetir la búsqueda.
+
+Como el orquestador, un ciclo no se ejecuta si la Fase 2 quedó bloqueada
+por R² < 0 (las élites devueltas en ese caso son ceros).
+
+Este test complementa test_fase3_transferencia.py (PSO↔DE), verificando
+que el sistema transfiere cuando la compatibilidad existe.
 """
 
 import sys
@@ -34,12 +43,21 @@ from middleware.transferencia import (
 )
 
 
-def main():
-    print("=" * 70)
-    print("TRANSFERENCIA EXITOSA — PSO bien afinado → PSO mal afinado (F1, D=10)")
-    print("=" * 70)
+FUNCION_ESCENARIO = 2   # elegida por búsqueda en las 12 funciones (ver docstring)
+NDIM_ESCENARIO = 10
 
-    problema = ProblemaCEC2022(numero_funcion=1, ndim=10)
+
+def correr_escenario(numero_funcion: int = FUNCION_ESCENARIO,
+                     ndim: int = NDIM_ESCENARIO, verbose: bool = True) -> dict:
+    """Corre el escenario fuente bien afinada → objetivo mal afinado y
+    devuelve los resultados de los criterios."""
+    _print = print if verbose else (lambda *a, **k: None)
+    _print("=" * 70)
+    _print(f"TRANSFERENCIA EXITOSA — PSO bien afinado → PSO mal afinado "
+           f"(F{numero_funcion}, D={ndim})")
+    _print("=" * 70)
+
+    problema = ProblemaCEC2022(numero_funcion=numero_funcion, ndim=ndim)
     n_iteraciones = 200
 
     # PSO fuente: bien afinado (parámetros estándar de la literatura)
@@ -59,6 +77,8 @@ def main():
     conocimiento_actual = None
     eventos = []
     instancias_inyectadas_total = 0
+    n_bloqueos_r2 = 0
+    it_primer_ciclo = None
 
     for it in range(1, n_iteraciones + 1):
         sf = pso_fuente.ejecutar_iteracion()
@@ -84,6 +104,15 @@ def main():
                     n_dimensiones=problema.ndim,
                 )
 
+            # Como el orquestador: con R² < 0 no hay conocimiento que
+            # transferir (las élites son ceros) y el ciclo no se ejecuta.
+            if conocimiento_actual.transferencia_bloqueada_por_r2:
+                n_bloqueos_r2 += 1
+                conocimiento_actual = None
+                continue
+
+            if it_primer_ciclo is None:
+                it_primer_ciclo = it
             resultado = ejecutar_ciclo_transferencia(
                 estado=estado,
                 algoritmo_fuente=pso_fuente,
@@ -104,8 +133,9 @@ def main():
             if not condicion:
                 conocimiento_actual = None
 
-    print(f"\nTotal de ciclos activados: {len(eventos)}")
-    print(f"Total de instancias inyectadas (Canal B): {instancias_inyectadas_total}")
+    _print(f"\nTotal de ciclos activados: {len(eventos)}")
+    _print(f"Ciclos no ejecutados por R² < 0 en la Fase 2: {n_bloqueos_r2}")
+    _print(f"Total de instancias inyectadas (Canal B): {instancias_inyectadas_total}")
 
     # Criterios de aceptación
     eventos_canal_a_activo = [
@@ -118,22 +148,25 @@ def main():
     inyecciones_canal_b = sum(e.get("n_instancias_inyectadas", 0) for e in eventos_canal_b)
     rechazadas_mmd = sum(e.get("instancias_rechazadas_por_mmd", 0) for e in eventos_canal_b)
 
-    print(f"\nEventos Canal A activo (RMP aplicado):       {len(eventos_canal_a_activo)}")
-    print(f"Eventos Canal A exitoso (evaluacion formal): {len(eventos_canal_a_exitoso)}")
-    print(f"Cierres provisionales (objetivo mejoró):     {len(eventos_cierre_provisional)}")
-    print(f"Eventos Canal B aplicado:                    {len(eventos_canal_b)}")
-    print(f"Instancias inyectadas Canal B:               {inyecciones_canal_b}")
-    print(f"Instancias rechazadas por MMD:               {rechazadas_mmd}")
+    _print(f"\nEventos Canal A activo (RMP aplicado):       {len(eventos_canal_a_activo)}")
+    _print(f"Eventos Canal A exitoso (evaluacion formal): {len(eventos_canal_a_exitoso)}")
+    _print(f"Cierres provisionales (objetivo mejoró):     {len(eventos_cierre_provisional)}")
+    _print(f"Eventos Canal B aplicado:                    {len(eventos_canal_b)}")
+    _print(f"Instancias inyectadas Canal B:               {inyecciones_canal_b}")
+    _print(f"Instancias rechazadas por MMD:               {rechazadas_mmd}")
 
-    # Verificar mejora de fitness del objetivo
-    fitness_inicial_obj = historial_fitness_obj[30] if len(historial_fitness_obj) > 30 else historial_fitness_obj[0]
+    # Mejora del objetivo desde el primer ciclo de transferencia (antes no
+    # hubo intervención) hasta el final.
     fitness_final_obj = historial_fitness_obj[-1]
     fitness_final_fuente = pso_fuente.mejor_fitness_historico
-
-    print(f"\nFitness objetivo it=30 (pre-transferencia): {fitness_inicial_obj:.4f}")
-    print(f"Fitness objetivo final:                      {fitness_final_obj:.4f}")
-    print(f"Fitness fuente final:                        {fitness_final_fuente:.4f}")
-    mejora_obj = fitness_inicial_obj > fitness_final_obj
+    if it_primer_ciclo is not None:
+        fitness_inicial_obj = historial_fitness_obj[it_primer_ciclo - 1]
+        _print(f"\nFitness objetivo it={it_primer_ciclo} (primer ciclo): {fitness_inicial_obj:.4f}")
+        mejora_obj = fitness_inicial_obj > fitness_final_obj
+    else:
+        mejora_obj = False
+    _print(f"Fitness objetivo final:                      {fitness_final_obj:.4f}")
+    _print(f"Fitness fuente final:                        {fitness_final_fuente:.4f}")
 
     hubo_transferencia_real = (
         len(eventos_canal_a_activo) > 0
@@ -143,24 +176,39 @@ def main():
     )
     rmp_dentro_rango = all(RMP_INICIAL <= r.rmp_resultante <= RMP_TOPE for _, r in eventos) if eventos else True
 
-    print()
-    print("=" * 70)
-    print("CRITERIOS DE ACEPTACIÓN")
-    print("=" * 70)
-    print(f"{'✅' if hubo_transferencia_real else '❌'} Hubo transferencia activa "
-          f"(Canal A aplicó RMP o Canal B inyectó): "
-          f"{'APROBADO' if hubo_transferencia_real else 'FALLÓ'} "
-          f"({len(eventos_canal_a_activo)} iter de Canal A, {inyecciones_canal_b} inyecciones Canal B)")
-    print(f"{'✅' if mejora_obj else '❌'} Objetivo mejoró su fitness tras la transferencia: "
-          f"{'APROBADO' if mejora_obj else 'FALLÓ'}")
-    print(f"{'✅' if rmp_dentro_rango else '❌'} RMP siempre dentro de [{RMP_INICIAL}, {RMP_TOPE}]: "
-          f"{'APROBADO' if rmp_dentro_rango else 'FALLÓ'}")
+    _print()
+    _print("=" * 70)
+    _print("CRITERIOS DE ACEPTACIÓN")
+    _print("=" * 70)
+    _print(f"{'✅' if hubo_transferencia_real else '❌'} Hubo transferencia activa "
+           f"(Canal A aplicó RMP o Canal B inyectó): "
+           f"{'APROBADO' if hubo_transferencia_real else 'FALLÓ'} "
+           f"({len(eventos_canal_a_activo)} iter de Canal A, {inyecciones_canal_b} inyecciones Canal B)")
+    _print(f"{'✅' if mejora_obj else '❌'} Objetivo mejoró su fitness desde el primer ciclo: "
+           f"{'APROBADO' if mejora_obj else 'FALLÓ'}")
+    _print(f"{'✅' if rmp_dentro_rango else '❌'} RMP siempre dentro de [{RMP_INICIAL}, {RMP_TOPE}]: "
+           f"{'APROBADO' if rmp_dentro_rango else 'FALLÓ'}")
 
-    if hubo_transferencia_real and mejora_obj and rmp_dentro_rango:
-        print("\n✅ Transferencia exitosa validada: el middleware activó un canal de "
-              "transferencia real y el algoritmo objetivo mejoró su fitness.")
+    aprobado = hubo_transferencia_real and mejora_obj and rmp_dentro_rango
+    if aprobado:
+        _print("\n✅ Transferencia exitosa validada: el middleware activó un canal de "
+               "transferencia real y el algoritmo objetivo mejoró su fitness.")
     else:
-        print("\n⚠️  Al menos un criterio no se cumplió.")
+        _print("\n⚠️  Al menos un criterio no se cumplió.")
+    return {
+        "funcion": numero_funcion, "ndim": ndim, "aprobado": aprobado,
+        "hubo_transferencia": hubo_transferencia_real, "mejora_obj": mejora_obj,
+        "n_ciclos": len(eventos), "n_bloqueos_r2": n_bloqueos_r2,
+        "it_primer_ciclo": it_primer_ciclo,
+        "iter_canal_a": len(eventos_canal_a_activo),
+        "inyecciones_canal_b": inyecciones_canal_b, "rechazadas_mmd": rechazadas_mmd,
+        "fitness_final_fuente": float(fitness_final_fuente),
+        "fitness_final_objetivo": float(fitness_final_obj),
+    }
+
+
+def main():
+    correr_escenario()
 
 
 if __name__ == "__main__":

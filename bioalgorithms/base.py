@@ -16,6 +16,19 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import numpy as np
 
+# Dimensiones del espacio latente común del Canal A (D-10,
+# docs/configuracion_experimental.md). Cada algoritmo traduce sus propios
+# hiperparámetros a estas dimensiones y desde ellas; el middleware solo
+# interpola en este espacio, sin conocer "w", "F", etc.
+#   - EXPLORACION: tamaño de paso / tendencia a explorar (PSO: inercia w;
+#     DE: factor de escala F). 0 y 1 marcan los extremos de un rango de
+#     referencia por algoritmo; el mapa es afín y NO se recorta, para que
+#     ida y vuelta sea la identidad y el RMP mueva los valores de a poco.
+#   - ADOPCION: fracción de información que un individuo toma de otros
+#     (PSO: peso social c2/(c1+c2); DE: probabilidad de cruce CR), en [0, 1].
+DIM_EXPLORACION = "exploracion"
+DIM_ADOPCION = "adopcion"
+
 
 @dataclass
 class EstadoIteracion:
@@ -228,6 +241,29 @@ class AlgoritmoBioinspirado(ABC):
         los parámetros recibidos a sus propios hiperparámetros internos.
         """
         pass
+
+    def a_espacio_comun(self, hiperparametros: dict) -> dict:
+        """
+        Canal A (D-10): traduce un dict de hiperparámetros PROPIOS de este
+        algoritmo (los vigentes, o los de un snapshot del historial, como
+        los parámetros de escape de la Fase 2) al espacio latente común
+        ({DIM_EXPLORACION: ..., DIM_ADOPCION: ...}). Solo se incluyen las
+        dimensiones que el algoritmo sabe expresar.
+
+        La implementación base no declara ninguna dimensión: un algoritmo
+        que no la sobrescriba deja el Canal A inerte (el orquestador escala
+        directo a Canal B), como antes de D-10.
+        """
+        return {}
+
+    def desde_espacio_comun(self, latente: dict) -> dict:
+        """
+        Inversa de `a_espacio_comun`: traduce valores del espacio latente
+        común a hiperparámetros propios, listos para
+        `recibir_parametros_transferidos`. Ignora las dimensiones que el
+        algoritmo no usa.
+        """
+        return {}
 
     def recibir_instancias_elite(self, instancias: np.ndarray, fitness_instancias: np.ndarray) -> None:
         """

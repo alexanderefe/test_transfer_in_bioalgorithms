@@ -23,8 +23,9 @@ tampoco se activa el ciclo completo.
 La solución fue INVERTIR los roles en este mismo caso ya validado
 (F11/semilla=42): con DE=fuente y PSO=objetivo, ambas condiciones de
 activación (estancamiento del objetivo + fuente en condiciones óptimas)
-se cumplen de forma consistente y sostenida desde la iteración ~80 en
-adelante. Esto es coherente con el principio de roles dinámicos del
+se cumplen de forma consistente y sostenida; el ciclo se activa desde la
+iteración 51, la primera con historial de la fuente mayor que la ventana
+de la Fase 2 (VENTANA_HISTORIAL_FUENTE = 50). Esto es coherente con el principio de roles dinámicos del
 documento de tesis ("identificar cuál es óptimo y transferir su
 conocimiento al de menor rendimiento"): en este caso particular, fue DE
 quien resultó ser el algoritmo de mejor desempeño real, no PSO.
@@ -35,14 +36,16 @@ Canal B, barrera de seguridad) de forma aislada, antes de añadir la
 complejidad adicional de roles dinámicos que se intercambian a mitad de
 la ejecución (pendiente para una validación posterior).
 
-Criterios de aceptación:
-1. La barrera de Wasserstein efectivamente bloquea la transferencia
-   cuando las poblaciones están muy dispersas (iteraciones tempranas).
-2. El Canal A se activa primero y el RMP evoluciona de forma gradual
-   (nunca excede el tope conservador).
-3. Si el Canal A no logra ΔScore significativo tras la ventana de
-   evaluación, el sistema escala correctamente a Canal B.
-4. El log de auditoría se genera de forma completa y consistente.
+Como el orquestador, un ciclo no se ejecuta si la Fase 2 quedó bloqueada
+por R² < 0 (las élites devueltas en ese caso son ceros).
+
+Criterios de aceptación (los que aplica el código):
+1. El RMP nunca sale de [RMP_INICIAL, RMP_TOPE].
+2. El Canal A se activa en algún momento.
+3. El log de auditoría se genera.
+4. La barrera de Wasserstein decide con la regla de la ecuación 7: cada
+   ciclo se aborta si y solo si W1 > θ_W (FRACCION_UMBRAL_WASSERSTEIN ×
+   diámetro máximo del espacio).
 """
 
 import sys
@@ -61,6 +64,9 @@ from middleware.extraccion import extraer_conocimiento, VENTANA_HISTORIAL_FUENTE
 from middleware.transferencia import (
     EstadoTransferencia, ejecutar_ciclo_transferencia, CanalActivo,
     RMP_TOPE, RMP_INICIAL,
+)
+from middleware.barrera_seguridad import (
+    FRACCION_UMBRAL_WASSERSTEIN, calcular_diametro_maximo,
 )
 
 
@@ -86,6 +92,7 @@ def main():
     rmp_historico = []
     canales_usados = []
     conocimiento_extraido_actual = None  # se cachea mientras el ciclo esté activo
+    n_bloqueos_r2 = 0
 
     for it in range(1, n_iteraciones + 1):
         snap_pso = pso.ejecutar_iteracion()
@@ -145,6 +152,13 @@ def main():
                     n_dimensiones=problema.ndim,
                 )
 
+            # Como el orquestador: con R² < 0 no hay conocimiento que
+            # transferir (las élites son ceros) y el ciclo no se ejecuta.
+            if conocimiento_extraido_actual.transferencia_bloqueada_por_r2:
+                n_bloqueos_r2 += 1
+                conocimiento_extraido_actual = None
+                continue
+
             resultado_transferencia = ejecutar_ciclo_transferencia(
                 estado=estado_transferencia,
                 algoritmo_fuente=de,
@@ -173,6 +187,7 @@ def main():
     # Verificación de criterios de aceptación.
     # ------------------------------------------------------------------
     print(f"\nTotal de ciclos de transferencia activados: {len(eventos_relevantes)}")
+    print(f"Ciclos no ejecutados por R² < 0 en la Fase 2: {n_bloqueos_r2}")
 
     if not eventos_relevantes:
         print("⚠️  No se activó ningún ciclo de transferencia en esta corrida. "
@@ -211,16 +226,15 @@ def main():
           f"generado ({len(estado_transferencia.log_eventos)} eventos): "
           f"{'APROBADO' if log_no_vacio else 'FALLÓ'}")
 
-    # Criterio 4: si hubo abortos por Wasserstein, deben concentrarse en
-    # las iteraciones más tempranas (poblaciones más dispersas).
-    iteraciones_abortadas = [it for it, r in eventos_relevantes if r.transferencia_abortada]
-    iteraciones_no_abortadas = [it for it, r in eventos_relevantes if not r.transferencia_abortada]
-    if iteraciones_abortadas and iteraciones_no_abortadas:
-        criterio_4 = max(iteraciones_abortadas) <= max(iteraciones_no_abortadas)
-    else:
-        criterio_4 = True  # no hay suficientes datos para evaluar, no se reprueba
-    print(f"{'✅' if criterio_4 else '❌'} Criterio 4 — Abortos por Wasserstein "
-          f"concentrados en iteraciones tempranas: "
+    # Criterio 4: la barrera aplica la ecuación 7 — cada ciclo se aborta si
+    # y solo si W1 > θ_W.
+    theta_w = FRACCION_UMBRAL_WASSERSTEIN * calcular_diametro_maximo(problema.limites)
+    n_abortados = sum(r.transferencia_abortada for _, r in eventos_relevantes)
+    criterio_4 = all(r.transferencia_abortada == (r.distancia_wasserstein > theta_w)
+                     for _, r in eventos_relevantes)
+    print(f"{'✅' if criterio_4 else '❌'} Criterio 4 — Barrera de Wasserstein: "
+          f"abortado ⇔ W1 > θ_W={theta_w:.2f} ({n_abortados}/"
+          f"{len(eventos_relevantes)} abortados): "
           f"{'APROBADO' if criterio_4 else 'FALLÓ'}")
 
     print()
@@ -248,11 +262,13 @@ def main():
         print(f"Total instancias inyectadas (Canal B, acumulado): {inyectadas_totales}")
         print(f"Total instancias rechazadas por MMD (Canal B, acumulado): {rechazadas_totales}")
 
-    # Evolución del fitness de PSO tras el escalamiento a Canal B
-    print()
-    print("Evolución de fitness_PSO tras escalar a Canal B (it=116 en adelante):")
-    for it_check in [116, 130, 150, 180, 210, 250]:
-        if it_check <= len(historial_fitness_pso):
+    # Evolución del fitness de PSO tras el primer escalamiento a Canal B
+    if eventos_escalado:
+        it_escalado = eventos_escalado[0]["iteracion"]
+        print()
+        print(f"Evolución de fitness_PSO tras escalar a Canal B "
+              f"(it={it_escalado} en adelante):")
+        for it_check in np.linspace(it_escalado, n_iteraciones, 6).astype(int):
             print(f"  it={it_check:4d} | fitness_PSO={historial_fitness_pso[it_check-1]:.4f}")
 
     print()

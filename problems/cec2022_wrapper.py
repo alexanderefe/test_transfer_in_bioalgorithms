@@ -1,6 +1,13 @@
 """
 Wrapper de las funciones del benchmark CEC 2022 (Kumar, Price, Mohamed,
-Hadi & Suganthan, 2022) sobre la librería opfunu.
+Hadi & Suganthan, 2022).
+
+La EVALUACIÓN usa el código oficial de la competición: backend "numba"
+(port compilado del C oficial, `problems/cec2022_numba.py`) o "referencia"
+(port Python oficial, `problems/cec2022_referencia.py`). Desde D-9 opfunu
+ya no evalúa nada — su CEC 2022 difiere del oficial en 11 de las 12
+funciones — y solo aporta metadatos (límites, nombre, f(x*), x*) y los
+archivos de datos `data_2022/`, idénticos a los oficiales.
 
 Se centraliza el acceso a las 12 funciones aquí por dos razones:
 1. Si en el futuro cambia la librería subyacente (o se reimplementa
@@ -22,15 +29,23 @@ from opfunu.cec_based import cec2022
 UMBRAL_ERROR_CERO = 1e-8
 
 # Fracciones de MaxFES en las que se fotografía el mejor valor visto hasta el
-# momento (traza de convergencia). Convención CEC + fracciones tempranas
-# densas para capturar el comportamiento inicial.
-FRACCIONES_CHECKPOINT = (
-    0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+# momento (traza de convergencia, para las curvas de convergencia por
+# función × dim × MaxFES × semilla de analisis/convergencia.py):
+#   - tramo inicial logarítmico, 10 puntos por década entre 10⁻⁴ y 10⁻²
+#     (el comportamiento inicial, que en escala lineal queda aplastado);
+#   - tramo lineal, un punto por cada 1 % de MaxFES (0.01 … 1.00).
+# 120 fracciones en total; incluye las 14 de la grilla anterior
+# (0.01, 0.02, 0.03, 0.05, 0.1, …, 1.0). La última siempre es 1.0: de ahí
+# sale la columna `error` (esquema §11.2).
+FRACCIONES_CHECKPOINT = tuple(
+    [round(10 ** (-4 + i / 10), 8) for i in range(20)]
+    + [round(i / 100, 2) for i in range(1, 101)]
 )
 
 # Mapeo de las 12 funciones oficiales del benchmark CEC 2022.
-# F1: unimodal | F2-F4: básicas (multimodales simples)
-# F5-F7: híbridas | F8-F12: composición (alta complejidad multimodal)
+# F1: unimodal | F2-F5: básicas | F6-F8: híbridas | F9-F12: composición
+# (clasificación del código oficial, cec22_test_func.cpp). Las clases de
+# opfunu se usan solo por sus metadatos (D-9).
 _FUNCIONES_CEC2022 = {
     1: cec2022.F12022,
     2: cec2022.F22022,
@@ -92,32 +107,34 @@ class ProblemaCEC2022:
                 f"Dimensión {ndim} no estándar para CEC 2022. "
                 f"Debe ser una de {DIMENSIONES_VALIDAS}."
             )
-        if backend not in ("numba", "opfunu"):
+        if backend not in ("numba", "referencia"):
             raise ValueError(
                 f"backend '{backend}' no reconocido. Debe ser 'numba' "
-                f"(evaluador compilado, default) u 'opfunu' (referencia "
-                f"interpretada, usado por el test de paridad)."
+                f"(evaluador compilado, default) o 'referencia' (port Python "
+                f"oficial de CEC 2022, lento; usado por el test de paridad)."
             )
 
+        # opfunu solo aporta metadatos (límites, nombre, f(x*), x*): su
+        # evaluación de CEC 2022 NO es la oficial (D-9).
         self._funcion = _FUNCIONES_CEC2022[numero_funcion](ndim=ndim)
         self.numero_funcion = numero_funcion
         self.ndim = ndim
         self.nombre = self._funcion.name
         self.backend = backend
 
-        # Backend compilado (D-5, docs/configuracion_experimental.md): evita
-        # el overhead de opfunu/numpy por llamada, que domina el tiempo de
-        # la parrilla experimental. Reutiliza los mismos arrays de
-        # shift/rotación/shuffle que opfunu ya cargó arriba — no es una
-        # reimplementación independiente de la especificación CEC, es el
-        # mismo cómputo compilado (paridad validada en
-        # tests/test_cec2022_numba_paridad.py). Import perezoso: quien use
-        # backend="opfunu" no necesita tener `numba` instalado.
-        self._eval_compilado = None
+        # Evaluador: port compilado del C oficial (D-5 → corregido en D-9,
+        # docs/configuracion_experimental.md), o el port Python oficial como
+        # referencia. Paridad validada en tests/test_cec2022_numba_paridad.py.
         if backend == "numba":
             from problems.cec2022_numba import construir_evaluador
-            self._eval_compilado = construir_evaluador(numero_funcion, self._funcion)
+            self._eval_compilado = construir_evaluador(numero_funcion, ndim)
             self._eval_compilado(np.zeros(ndim))  # warm-up: compila aquí, no en la corrida
+        else:
+            from problems.cec2022_referencia import cec22_test_func
+
+            def _eval_ref(x):
+                return float(cec22_test_func(np.array(x, dtype=float), ndim, 1, numero_funcion)[0])
+            self._eval_compilado = _eval_ref
 
         # opfunu expone bounds como array (ndim, 2): [min, max] por dimensión
         self.limites = np.array(self._funcion.bounds, dtype=float)
@@ -172,10 +189,7 @@ class ProblemaCEC2022:
 
     def evaluar(self, x: np.ndarray) -> float:
         """Interfaz uniforme: recibe un vector y retorna un escalar."""
-        if self.backend == "numba":
-            valor = float(self._eval_compilado(x))
-        else:
-            valor = float(self._funcion.evaluate(x))
+        valor = float(self._eval_compilado(x))
         with self._lock_fes:
             self._fes += 1
             if valor < self._mejor_visto:

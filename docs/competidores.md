@@ -1,15 +1,27 @@
-# Competidores — roster candidato y sourcing (setup §3) — SUPERSEDED
+# Competidores — roster candidato y sourcing (setup §3)
 
-> **⚠ DESCARTADO (decisión D-4, 2026-09-04, ver
-> `configuracion_experimental.md`).** El roster de este documento NO se
-> implementa. Los únicos competidores son **PSO y DE corriendo solos**
-> (sin middleware) — el experimento se programó desde el inicio alrededor
-> de estos dos algoritmos, y el roster externo disparaba el cómputo a
-> semanas. Se conserva este documento como registro de la exploración y
-> del porqué se descartó, no como plan de trabajo vigente.
+> **Estado vigente (D-8, 2026-10-12, ver `configuracion_experimental.md`):**
+> de este roster se implementaron **3 competidores externos**, que corren
+> solos junto a PSO y DE solos (D-4):
 >
-> Estado en el momento de escribirlo: NADA seleccionado ni implementado.
-> Última actualización: 2026-09-03.
+> | id | Algoritmo | Fila del roster | Implementación |
+> |---|---|---|---|
+> | `cmaes` | IPOP-CMA-ES | #20 (CMA-ES) | librería `cma` 4.5.0 (Hansen) + bucle IPOP propio |
+> | `madde` | MadDE | #12 | port a Python del **MATLAB** oficial (`subhodipbiswas/MadDE`) |
+> | `nlshadersp` | NL-SHADE-RSP | #11 | port a Python del **C++** oficial (entrega CEC 2021) |
+>
+> Código en `experimentos/competidores/` (estructura real en §7). **Corrección
+> a la tabla de §2:** el repositorio de MadDE de los autores es MATLAB, no
+> Python (`PY✓✓` era incorrecto); se portó igual que NL-SHADE-RSP.
+>
+> El resto del roster **no** se implementa. EA4eig (#25, ganador CEC 2022)
+> y HCLPSO (#15) quedaron como 4.º competidor opcional no adoptado.
+>
+> **Historia:** la versión de 2026-09-03 de este documento quedó descartada
+> por D-4 (2026-09-04): el roster completo de ~22 algoritmos disparaba el
+> cómputo a semanas. El 2026-10-08 se propuso retomar 3–4 competidores con
+> criterios de selección (README), y D-8 adoptó los 3 primeros. El resto
+> del documento se conserva como registro de la exploración.
 
 ---
 
@@ -145,22 +157,21 @@ Diferencia Crítica de Nemenyi: `CD = q_α·√(23·24/(6·12)) ≈ q_α·2.77`.
 
 ---
 
-## 7. Estructura de implementación (pendiente)
+## 7. Estructura de implementación (implementada en D-8)
 
 ```
 experimentos/competidores/
-├── __init__.py
-├── base.py            # protocolo común: correr(problema, dim, max_fes, semilla) -> mejor_error
-├── registro.py        # {nombre: (constructor, familia, version, params_autor)}
-├── mealpy_wrap.py     # los del grupo Verde vía mealpy
-├── pymoo_wrap.py      # GA, DE, PSO vía pymoo
-├── cma_wrap.py        # CMA-ES vía `cma`
-├── madde.py           # port/adaptación de MadDE
-├── octave/            # .m originales + oct2py para EA4eig, APGSK-IMODE, UMOEAII, HSES
-└── ...
+├── __init__.py        # COMPETIDORES = {id: (módulo, nombre, familia)}
+├── base.py            # Presupuesto: corte exacto en MaxFES (PresupuestoAgotado)
+├── cmaes_ipop.py      # IPOP-CMA-ES sobre `cma`
+├── madde.py           # port de MadDE.m (+ gnR1R2, updateArchive, boundConstraint)
+└── nlshade_rsp.py     # port de nl_shade_rsp.cpp
 ```
 
-Todos deben: (a) parar exactamente en MaxFES usando `problema.fes`, (b)
-devolver el mejor valor con ≤ MaxFES evaluaciones, (c) sembrar su RNG con la
-semilla de la corrida. El `corrida.py` del harness los despacha por nombre
-(hoy `_RUNNERS` solo tiene `middleware`).
+Cada módulo expone `correr(problema, max_fes, semilla) -> None` y una
+constante `VERSION`. Los tres (a) paran exactamente en MaxFES (toda
+evaluación pasa por `Presupuesto.evaluar`, que corta en `problema.fes ==
+max_fes`), (b) dejan el mejor valor con ≤ MaxFES evaluaciones en los
+checkpoints de `problema`, y (c) siembran su RNG con la semilla de la
+corrida. `experimentos/corrida.py` los registra en `_RUNNERS` a partir de
+`COMPETIDORES`.

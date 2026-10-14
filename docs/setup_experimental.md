@@ -8,16 +8,19 @@
 >
 > Configuración de parámetros del algoritmo propuesto: ver
 > [`configuracion_experimental.md`](configuracion_experimental.md).
-> Última actualización: 2026-09-01.
+> Última actualización: 2026-10-12 (D-8: competidores externos).
 
 ---
 
 ## 1. Problemas de prueba
 
-- **Benchmark:** CEC 2022, 12 funciones (`opfunu.cec_based.cec2022`),
-  vía `problems/cec2022_wrapper.py`.
-  - F1: unimodal · F2–F4: multimodales básicas · F5–F7: híbridas ·
-    F8–F12: composición.
+- **Benchmark:** CEC 2022, 12 funciones, evaluadas con el **código
+  oficial de la competición** (port Numba del C oficial,
+  `problems/cec2022_numba.py`, vía `problems/cec2022_wrapper.py`). **No**
+  con `opfunu.cec_based.cec2022`, que difiere del oficial en 11 de las 12
+  funciones (D-9, `configuracion_experimental.md`).
+  - F1: unimodal · F2–F5: básicas · F6–F8: híbridas · F9–F12: composición
+    (como en `cec22_test_func.cpp`).
   - Rango de búsqueda `[−100, 100]^D`.
   - Óptimo global `f(x*)` conocido (tabla `OPTIMO_GLOBAL_CEC2022`:
     F1→300 … F12→2700). El **error** reportado es `f_obtenido − f(x*)`
@@ -45,38 +48,59 @@
 - Implementado: `HiloAlgoritmo._presupuesto_agotado` (no arranca una
   generación que no cabe; sobrepaso ≤ `n_individuos` por hilo).
 
-## 3. Algoritmos competidores — DESVIACIÓN DEL SETUP ORIGINAL (decisión D-4)
+## 3. Algoritmos competidores — DESVIACIÓN DEL SETUP ORIGINAL (D-4 + D-8)
 
 El PDF exige, para una "metaheurística distinta" (no variante de DE),
 **≥ 20–25 algoritmos diversos**. Se evaluó un roster candidato de 27
-(archivado en [`competidores.md`](competidores.md), superseded) y se
-**descartó**: implementarlo y correrlo disparaba el cómputo a semanas, y
-varios de los ganadores CEC que el PDF nombra (EA4eig, APGSK-IMODE, UMOEAII)
-solo tienen código MATLAB.
+(registrado en [`competidores.md`](competidores.md)) y se **descartó como
+roster completo** (D-4): implementarlo y correrlo disparaba el cómputo a
+semanas, y varios de los ganadores CEC que el PDF nombra (EA4eig,
+APGSK-IMODE, UMOEAII) solo tienen código MATLAB.
 
-**Decisión (D-4, `configuracion_experimental.md`): los únicos competidores
-son PSO y DE corriendo SOLOS** (sin middleware, sin transferencia), con la
-misma configuración congelada (§A.1) que usan como algoritmos base del
-propuesto. Motivo: el experimento se programó desde el inicio alrededor de
-estos dos algoritmos, y esa comparación —¿el middleware mejora sobre los
-algoritmos base sin transferencia?— es la pregunta central de la tesis.
+El panel vigente tiene **5 competidores** del propuesto, en dos grupos:
 
-- **Impacto en cómputo:** sube el total de ~53 h a **~183 h (≈7.6 días) en
-  5 workers** — ver la tabla de D-4. Sigue siendo muchísimo menor que el
-  roster externo (semanas–meses), pero **no es gratis**: hay que tenerlo
-  presente al planificar.
-- **Implementado:** `experimentos/corrida.py` (`_RUNNERS["pso"]`,
-  `_RUNNERS["de"]`) y `grid.py --algoritmo middleware,pso,de` (default).
-- Las secciones §6–§9 (rankings, Friedman/Nemenyi, Wilcoxon, discusión) se
-  aplican igual, con **3 algoritmos por ranking** (propuesto, PSO, DE) en
-  vez de ~23. Los rankings y CD diagrams siguen siendo válidos con N=3,
-  aunque menos informativos que con un panel amplio — se debe reconocer
-  esta limitación en la redacción.
+1. **Algoritmos base solos (D-4):** PSO y DE corriendo SOLOS (sin
+   middleware, sin transferencia), con la misma configuración congelada
+   (§A.1) que usan como algoritmos base del propuesto. Responden la
+   pregunta central de la tesis: ¿el middleware mejora sobre sus algoritmos
+   base sin transferencia?
+2. **Competidores externos (D-8, `configuracion_experimental.md`):** tres
+   algoritmos del roster, elegidos por criterios explícitos (credibilidad
+   en CEC, diversidad de paradigma, integración fiel, escalado a 5×10⁷):
+
+   | id | Algoritmo | Paradigma / por qué |
+   |---|---|---|
+   | `cmaes` | **IPOP-CMA-ES** (Auger & Hansen 2005) | basado en distribución; referencia universal; los reinicios aprovechan presupuestos grandes |
+   | `madde` | **MadDE** (Biswas et al., CEC 2021) | DE multi-operador adaptativo: combina estrategias **sin transferencia**, descarta que la mejora del propuesto venga solo de "combinar" |
+   | `nlshadersp` | **NL-SHADE-RSP** (Stanovov et al., ganador CEC 2021) | estado del arte de la línea L-SHADE; población ajustada a MaxFES |
+
+   Corren solos, como caja negra `(problema, max_fes, semilla)` sobre el
+   mismo `ProblemaCEC2022` (corte exacto en MaxFES, mismas semillas y
+   checkpoints). Código en `experimentos/competidores/`.
+
+- **Implementado:** `experimentos/corrida.py` (`_RUNNERS`) y
+  `grid.py --algoritmo middleware,pso,de,cmaes,madde,nlshadersp` (default:
+  los seis).
+- Las secciones §6–§9 se aplican con **6 algoritmos por ranking** (k=6,
+  `CD ≈ 2.18` con N=12) en vez de ~23. Sigue por debajo del mínimo del
+  PDF — reconocerlo en la redacción como limitación, junto con la
+  ausencia del ganador de CEC 2022 (EA4eig, solo MATLAB).
+- Impacto en cómputo: ver D-8 en `configuracion_experimental.md`.
 
 ## 4. Configuración de parámetros
 
 - **Competidores:** valores recomendados por sus autores originales, sin
-  re-tuning. Tamaños de población documentados en una tabla del paper.
+  re-tuning. Tamaños de población documentados en una tabla del paper:
+
+  | Competidor | Población | Otros parámetros (de los autores) |
+  |---|---|---|
+  | PSO solo | 30 | config. congelada del propuesto (§A.1) |
+  | DE solo | 30 | config. congelada del propuesto (§A.1) |
+  | IPOP-CMA-ES | λ₀ = 4+⌊3 ln D⌋ (10 / 12), ×2 por reinicio | σ₀ = ¼ del dominio; defaults de `cma` 4.5.0 |
+  | MadDE | 2·D² → 4 (lineal) | p_best 0.18, archivo 2.3, q_cr 0.01, memoria 10·D |
+  | NL-SHADE-RSP | 30·D → 4 (no lineal) | archivo 2.1, memoria 20·D, pbest 0.2→0.4 |
+
+  Detalle en `configuracion_experimental.md` §A.8.
 - **Algoritmo propuesto:** una única configuración para las 8
   configuraciones experimentales, sin ajuste por MaxFES ni por problema.
   Congelada en [`configuracion_experimental.md`](configuracion_experimental.md).
@@ -92,8 +116,8 @@ algoritmos base sin transferencia?— es la pregunta central de la tesis.
   `resumen.error_sistema`. El esquema completo de captura está en **§11**.
 - **Métrica de comparación:** media de las 51 corridas del error
   (`mean( f_obtenido − f(x*) )`).
-- Volumen: 12 × 2 × 4 × 51 = **4 896 corridas del algoritmo propuesto**
-  (más 51× por cada competidor). El coste de las corridas a MaxFES = 5×10⁷
+- Volumen: 12 × 2 × 4 × 51 = **4 896 corridas por algoritmo** → con los 6
+  algoritmos (propuesto + 5 competidores), **29 376 corridas**. El coste de las corridas a MaxFES = 5×10⁷
   (D-6) es el principal cuello de botella → el harness debe soportar
   paralelismo por proceso y checkpoint/reanudación.
 
@@ -167,6 +191,10 @@ Mínimo:
   configuración.
 - Material suplementario: media, mediana y desviación estándar de las 51
   corridas para cada (función × dimensionalidad × MaxFES × algoritmo).
+- **Gráficos de convergencia** (agregado posterior al setup original): error
+  (o fitness) best-so-far vs FES de los 6 algoritmos, por (dimensionalidad ×
+  MaxFES × función), como mediana de las 51 semillas con banda
+  intercuartil, y opcionalmente por semilla (`analisis/convergencia.py`).
 
 ## 9. Discusión obligatoria
 
@@ -193,7 +221,9 @@ Se entregará:
   continuación entre MaxFES) y a la vez permite el emparejamiento por
   semilla del test de Wilcoxon.
 - Versiones exactas de los códigos de los competidores (commit / release +
-  parámetros) en una tabla.
+  parámetros) en una tabla — quedan registradas por corrida en la columna
+  `version` (§11.2): `alg:cma-4.5.0`, `alg:port-MadDE.m@13f0582`,
+  `alg:port-nl_shade_rsp.cpp@CEC2021` (D-8).
 - Resultados crudos de cada corrida (`resultados/`), en material
   suplementario.
 - 8 diagramas de Diferencia Crítica (Nemenyi).
@@ -221,6 +251,7 @@ agregados.
 | Desviación de rangos promedio (§7) | vector de rangos promedio por configuración |
 | Material suplementario (§8) | media, mediana y **desv. estándar** de las 51 → requiere los 51 valores |
 | Barras de rangos × MaxFES (§8) | rango promedio por (algoritmo × dim × MaxFES) |
+| Gráficos de convergencia (§8) | traza best-so-far de **cada corrida** (`error_checkpoints`, 120 puntos) |
 | Robustez del propuesto (§9) | posición del propuesto en los 8 rankings |
 | Discusión operadores × MaxFES (§9) | diagnósticos del middleware por corrida (11.3) |
 
@@ -239,20 +270,20 @@ sin contención entre workers); `experimentos/consolidar.py` los une en
 | Columna | Tipo | Para qué |
 |---|---|---|
 | `run_id` | str | `<algoritmo>__f<NN>__d<NN>__fes<N>__s<NN>` — dedupe y reanudación |
-| `algoritmo` | str | id corto (p. ej. `middleware`, `LSHADE`, `PSO`, `EA4eig`) |
-| `familia` | str | `propuesto` \| `DE` \| `swarm` \| `evolutivo` \| `distribucion` — para agrupar en figuras |
-| `version` | str | commit / release / versión de librería + hash de la config usada (§10) |
+| `algoritmo` | str | id corto: `middleware`, `pso`, `de`, `cmaes`, `madde`, `nlshadersp` |
+| `familia` | str | `propuesto` \| `baseline` (pso/de solos) \| `DE` \| `distribucion` — para agrupar en figuras (`esquema.FAMILIA_ALGORITMO`) |
+| `version` | str | `git:<commit>\|eval:<backend>` + `\|alg:<implementación>` para los competidores externos (§10) |
 | `benchmark` | str | `CEC2022` (constante, explícito) |
 | `funcion` | int | 1 … 12 |
 | `dim` | int | 10 \| 20 |
 | `conjunto` | str | `CEC2022_10` \| `CEC2022_20` |
-| `max_fes` | int | 5000 \| 50000 \| 500000 \| 5000000 |
+| `max_fes` | int | 50000 \| 500000 \| 5000000 \| 50000000 (D-6) |
 | `idx_semilla` | int | 0 … 50 (posición en `semillas.json`) |
 | `semilla` | int | valor de la semilla |
 | `f_mejor` | float | `f_opt + error` |
 | **`error`** | float | mejor error usando **≤ MaxFES** evaluaciones = `error_checkpoints[-1]` (checkpoint de la fracción 1.0). Se toma del checkpoint, no del resumen, para no contar las ≤ pop evaluaciones de sobrepaso de la última generación. **La columna que consume todo el análisis.** |
 | `f_opt` | float | f(x*) conocido de la función |
-| `error_checkpoints` | list[float] (14) | best-so-far error en FES = {0.01, 0.02, 0.03, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}·MaxFES. Se captura vía hook en `ProblemaCEC2022` (sirve igual para competidores). Monótona no creciente. |
+| `error_checkpoints` | list[float] (120) | best-so-far error en FES = `FRACCIONES_CHECKPOINT`·MaxFES: 20 fracciones logarítmicas entre 10⁻⁴ y 10⁻² (10 por década) + una por cada 1 % (0.01 … 1.00). Incluye las 14 de la grilla anterior. Sin umbral 10⁻⁸ (fitness = `f_opt` + error, exacto). Se captura vía hook en `ProblemaCEC2022` (sirve igual para competidores). Monótona no creciente. |
 | `fes_consumidas` | int | evaluaciones realmente gastadas (`max_fes` ± pop por el sobrepaso/subpaso de la última generación); detecta corridas corruptas |
 | `estado` | str | `ok` \| `fallo` \| `timeout` |
 | `mensaje_error` | str | vacío si `ok` |
@@ -297,16 +328,17 @@ derivar temporalmente del log): añadir a `ResumenEjecucion` los campos
 |---|---|---|
 | `experimentos/semillas.json` + `generar_semillas.py` + `semillas.py` | 51 semillas fijas (mismas para todo algoritmo y config) | ✅ |
 | `experimentos/esquema.py` | esquemas §11.2 / §11.3, `run_id()`, builders de fila, `df_tipado()` | ✅ |
-| `experimentos/corrida.py` | `correr_corrida(...) → (fila §11.2, fila §11.3\|None)`; `middleware`, `pso`, `de` (D-4) | ✅ |
-| `experimentos/grid.py` | `--algoritmo middleware,pso,de` (default); per-run Parquet; reanudación; `ProcessPoolExecutor`; `--dry-run` con estimación por algoritmo | ✅ |
+| `experimentos/corrida.py` | `correr_corrida(...) → (fila §11.2, fila §11.3\|None)`; `middleware`, `pso`, `de` (D-4), `cmaes`, `madde`, `nlshadersp` (D-8) | ✅ |
+| `experimentos/grid.py` | `--algoritmo` (default: los 6); per-run Parquet; reanudación; `ProcessPoolExecutor`; `--dry-run` con estimación por algoritmo | ✅ |
 | `experimentos/consolidar.py` | `resultados/corridas/*.parquet` → `resultados/corridas.parquet` | ✅ |
-| `problems/cec2022_wrapper.py` | hook de checkpoints (`configurar_checkpoints`, `error_checkpoints`) | ✅ |
+| `problems/cec2022_wrapper.py` | hook de checkpoints (`configurar_checkpoints`, `error_checkpoints`; 120 fracciones de `FRACCIONES_CHECKPOINT`) | ✅ |
 | `middleware/orquestador.py` | campos `fes_primera_activacion`, `n_generaciones_{a,b}`; modo `silencioso` | ✅ |
-| ~~`experimentos/competidores/`~~ | descartado (D-4): sin roster externo, solo PSO/DE solos | ❌ superseded |
-| `analisis/rankings.py` | error medio → rangos por función, promedio, empates 10⁻⁸ (N=3: propuesto, PSO, DE) | ⏳ |
-| `analisis/estadistica.py` | Friedman + Shaffer, Wilcoxon b/e/w, desv. de rangos | ⏳ |
-| `analisis/cd_nemenyi.py` | rangos promedio + CD → 8 diagramas de Diferencia Crítica | ⏳ |
-| `analisis/figuras.py` | barras de rangos × MaxFES; tablas resumen de posiciones | ⏳ |
+| `experimentos/competidores/` | IPOP-CMA-ES, MadDE, NL-SHADE-RSP como caja negra con corte exacto en MaxFES (D-8) | ✅ |
+| `analisis/rankings.py` | error medio → rangos por función, promedio, empates 10⁻⁸ (k=6) | ✅ |
+| `analisis/estadistica.py` | Friedman + Shaffer (secuencia derivada para cualquier k), Wilcoxon b/e/w, desv. de rangos | ✅ |
+| `analisis/cd_nemenyi.py` | rangos promedio + CD → 8 diagramas de Diferencia Crítica | ✅ |
+| `analisis/figuras.py` | barras de rangos × MaxFES; tablas resumen de posiciones | ✅ |
+| `analisis/convergencia.py` | curvas de convergencia por (dim × MaxFES × función), mediana + IQR y por semilla, en error o fitness | ✅ |
 
 ### ✅ RESUELTO — reproducibilidad del algoritmo propuesto (D-2)
 

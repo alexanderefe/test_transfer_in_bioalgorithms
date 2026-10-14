@@ -6,10 +6,11 @@ supera la Diferencia Crítica
 
     CD = q_alpha * sqrt( k(k+1) / (6N) )
 
-con k=3 algoritmos, N=12 funciones, q_alpha = valor crítico del rango
-studentizado (alpha=0.05) dividido por sqrt(2). Se calcula con
-`scipy.stats.studentized_range` (sin tabla hardcodeada) — para k=3 da
-q_alpha ≈ 2.3437, que coincide con la tabla publicada de Demšar (2006).
+con k=6 algoritmos (D-8), N=12 funciones, q_alpha = valor crítico del
+rango studentizado (alpha=0.05) dividido por sqrt(2). Se calcula con
+`scipy.stats.studentized_range` (sin tabla hardcodeada) y se contrasta
+con la tabla publicada de Demšar (2006) — para k=6 da q_alpha ≈ 2.850,
+CD ≈ 2.18.
 
 8 diagramas, uno por (dim × MaxFES).
 """
@@ -35,6 +36,11 @@ from analisis.rankings import ranking_configuracion
 
 ALPHA = 0.05
 
+# q_0.05 publicados en Demšar (2006), Tabla 5(a) — solo para verificar el
+# cálculo de `q_alpha`, no se usan para calcular nada.
+_Q_DEMSAR_005 = {2: 1.960, 3: 2.343, 4: 2.569, 5: 2.728, 6: 2.850,
+                 7: 2.949, 8: 3.031, 9: 3.102, 10: 3.164}
+
 
 def q_alpha(k: int, alpha: float = ALPHA) -> float:
     """Valor crítico del rango studentizado para k tratamientos, dividido
@@ -57,7 +63,7 @@ def dibujar_cd(rangos_promedio: dict[str, float], cd: float, titulo: str, ruta_s
     valores = [rangos_promedio[a] for a in algoritmos]
     k = len(algoritmos)
 
-    fig, ax = plt.subplots(figsize=(7, 2.2))
+    fig, ax = plt.subplots(figsize=(8, 2.6))
     ax.set_xlim(0.5, k + 0.5)
     ax.set_ylim(0, 1)
     ax.axhline(0.5, color="black", linewidth=1)
@@ -65,24 +71,28 @@ def dibujar_cd(rangos_promedio: dict[str, float], cd: float, titulo: str, ruta_s
         ax.plot([x, x], [0.47, 0.53], color="black", linewidth=1)
         ax.text(x, 0.6, str(x), ha="center", fontsize=9)
 
-    for a, v in zip(algoritmos, valores):
+    for n, (a, v) in enumerate(zip(algoritmos, valores)):
         ax.plot(v, 0.5, "o", color="tab:blue", markersize=6)
+        # Alturas alternadas: con 6 algoritmos dos rangos cercanos
+        # superponían sus etiquetas.
         ax.annotate(f"{NOMBRE_ALGORITMO.get(a, a)}\n({v:.2f})", xy=(v, 0.5),
-                    xytext=(v, 0.15), ha="center", fontsize=8,
+                    xytext=(v, 0.2 if n % 2 == 0 else 0.0), ha="center", fontsize=8,
                     arrowprops=dict(arrowstyle="-", color="gray"))
 
     # Barras de grupo: algoritmos consecutivos (por rango) cuya diferencia
-    # extremo-a-extremo es < CD quedan unidos como "indistinguibles".
-    y_barra = 0.85
-    i = 0
-    while i < k:
+    # extremo-a-extremo es < CD quedan unidos como "indistinguibles". Solo
+    # se dibujan los grupos maximales (un grupo contenido en el anterior no
+    # agrega información y, con 6 algoritmos, bajaba hasta tapar el eje).
+    y_barra = 0.95
+    fin_anterior = -1
+    for i in range(k):
         j = i
         while j + 1 < k and (valores[j + 1] - valores[i]) < cd:
             j += 1
-        if j > i:
+        if j > i and j > fin_anterior:
             ax.plot([valores[i], valores[j]], [y_barra, y_barra], color="black", linewidth=2)
-            y_barra -= 0.12
-        i += 1
+            y_barra -= 0.06
+            fin_anterior = j
 
     ax.set_title(f"{titulo}  (CD = {cd:.3f})", fontsize=10)
     ax.axis("off")
@@ -116,9 +126,11 @@ def main():
     k = len(ALGORITMOS)
     qa = q_alpha(k)
     cd = diferencia_critica(k, N_FUNCIONES)
-    print(f"q_alpha(k={k}, alpha=0.05) = {qa:.4f}  (referencia publicada: 2.3437 para k=3)")
+    print(f"q_alpha(k={k}, alpha=0.05) = {qa:.4f}  "
+          f"(referencia publicada: {_Q_DEMSAR_005[k]} para k={k})")
     print(f"CD (k={k}, N={N_FUNCIONES}) = {cd:.4f}\n")
-    assert abs(qa - 2.3437) < 1e-3, "q_alpha no coincide con la tabla publicada de Demšar (2006)"
+    assert abs(qa - _Q_DEMSAR_005[k]) < 1e-3, \
+        "q_alpha no coincide con la tabla publicada de Demšar (2006)"
 
     resumen = generar_todos()
     for fila in resumen:

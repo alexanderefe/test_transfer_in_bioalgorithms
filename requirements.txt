@@ -14,3 +14,4 @@ tqdm>=4.65
 pandas>=2.0        # harness experimental: resultados en Parquet
 pyarrow>=15.0      # backend Parquet de pandas
 numba>=0.67        # evaluador CEC2022 compilado (D-5); wheel cp314 confirmado, sin toolchain C
+cma==4.5.0         # IPOP-CMA-ES (competidor externo, D-8); versión fijada: se registra en la columna `version`

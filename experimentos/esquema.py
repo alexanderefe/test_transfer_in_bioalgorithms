@@ -12,15 +12,16 @@ from __future__ import annotations
 
 import pandas as pd
 
-# Familia de cada algoritmo (para agrupar en figuras). Decisión (D-4,
-# docs/configuracion_experimental.md): los únicos "competidores" son PSO y
-# DE corriendo SOLOS (sin middleware, con la misma config congelada) — el
-# experimento se programó desde el inicio alrededor de estos dos algoritmos.
-# No se agregan competidores externos.
+# Familia de cada algoritmo (para agrupar en figuras). PSO y DE solos son
+# los algoritmos base del propuesto sin middleware (D-4); los competidores
+# externos (D-8) se etiquetan por paradigma (setup §11.2).
 FAMILIA_ALGORITMO = {
     "middleware": "propuesto",
     "pso": "baseline",
     "de": "baseline",
+    "cmaes": "distribucion",
+    "madde": "DE",
+    "nlshadersp": "DE",
 }
 
 # ── §11.2 · tabla `corridas` ────────────────────────────────────────────────
@@ -40,7 +41,7 @@ COLUMNAS_CORRIDA: dict[str, str] = {
     "f_mejor": "float64",
     "error": "float64",
     "f_opt": "float64",
-    "error_checkpoints": "object",   # list[float] de 14 elementos
+    "error_checkpoints": "object",   # list[float], uno por FRACCIONES_CHECKPOINT (120)
     "fes_consumidas": "int64",
     "estado": "string",              # ok | fallo | timeout
     "mensaje_error": "string",
@@ -112,7 +113,7 @@ def fila_corrida(meta: dict, *, estado: str, problema=None,
     En fallo se pasa `estado="fallo"` y `problema` puede ser None.
 
     Todo sale de `problema` (agnóstico al algoritmo: sirve igual para el
-    middleware, PSO solo o DE solo): `problema.optimo_global`, `problema.fes`
+    middleware, PSO/DE solos o un competidor externo): `problema.optimo_global`, `problema.fes`
     y `problema.error_checkpoints()`. No depende de `ResumenEjecucion`.
     """
     fila = {c: None for c in COLUMNAS_CORRIDA}

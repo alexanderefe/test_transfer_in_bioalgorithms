@@ -23,7 +23,7 @@ from middleware.barrera_seguridad import (
     calcular_diametro_maximo,
     evaluar_barrera_wasserstein,
     calcular_mmd,
-    calcular_umbral_mmd_dinamico,
+    calcular_referencia_mmd,
     filtrar_instancias_por_mmd,
 )
 
@@ -41,7 +41,11 @@ def caso_wasserstein_real():
     diametro = calcular_diametro_maximo(problema.limites)
     print(f"Diámetro máximo del espacio (D=20, rango [-100,100]): {diametro:.4f}")
 
-    resultados_esperados_aprox = {20: 343.99, 100: 172.34, 300: 130.74}
+    # Recalibrado sobre el evaluador CEC 2022 oficial (D-9). Con opfunu eran
+    # {20: 343.99, 100: 172.34, 300: 130.74}: PSO y DE convergían hacia la
+    # misma región; con la F11 oficial quedan en cuencas distintas (~0.44
+    # del diámetro, ver D-11).
+    resultados_esperados_aprox = {20: 403.36, 100: 399.21, 300: 387.91}
     todo_coherente = True
     for it in [20, 100, 300]:
         while pso.iteracion_actual < it:
@@ -58,14 +62,14 @@ def caso_wasserstein_real():
               f"| permitida={resultado.transferencia_permitida}")
 
         # Verificación de coherencia: el valor debe estar en el mismo
-        # orden de magnitud que lo observado durante el diseño manual.
+        # orden de magnitud que lo observado con el evaluador oficial (D-9).
         esperado = resultados_esperados_aprox[it]
         diferencia_relativa = abs(resultado.distancia_wasserstein - esperado) / esperado
         if diferencia_relativa > 0.05:
             todo_coherente = False
 
-    print(f"\n{'✅' if todo_coherente else '❌'} Coherencia con valores observados "
-          f"durante el diseño manual: {'APROBADO' if todo_coherente else 'FALLÓ'}")
+    print(f"\n{'✅' if todo_coherente else '❌'} Coherencia con valores de referencia "
+          f"(evaluador oficial, D-9): {'APROBADO' if todo_coherente else 'FALLÓ'}")
     return todo_coherente
 
 
@@ -104,43 +108,62 @@ def caso_mmd_control():
 def caso_umbral_dinamico_y_filtro():
     print()
     print("=" * 70)
-    print("CASO 3 — Umbral dinámico de MMD y filtro de instancias")
+    print("CASO 3 — Filtro MMD por instancia (forma, no ubicación)")
     print("=" * 70)
 
+    # Reescrito en D-11 (cierra D-1e): el filtro decide por instancia; las
+    # candidatas se centran en la media de la fuente (de ahí salen las
+    # élites de la Fase 2) y el ancho del kernel y el umbral (máximo del
+    # nulo leave-one-out) salen del OBJETIVO. Con el objetivo colapsado el
+    # filtro no es aplicable y aprueba todo.
     problema = ProblemaCEC2022(numero_funcion=11, ndim=20)
     pso = PSO(problema, 30, problema.ndim, problema.limites, 300, semilla=42)
-    de = DE(problema, 30, problema.ndim, problema.limites, 300, semilla=42,
-            F=0.2, CR=0.3)
     for _ in range(100):
         pso.ejecutar_iteracion()
-        de.ejecutar_iteracion()
+    fuente = pso.poblacion.copy()
+    centro = fuente.mean(axis=0)
+    referencia = calcular_referencia_mmd(fuente)
 
-    umbral = calcular_umbral_mmd_dinamico(pso.poblacion)
-    print(f"Umbral dinámico de MMD (3x percentil 95 del ruido de referencia "
-          f"de la población fuente): {umbral:.6f}")
+    def filtrar(candidatas, objetivo):
+        return filtrar_instancias_por_mmd(candidatas, fuente, objetivo,
+                                          problema.limites,
+                                          referencia=referencia)
 
-    # Caso de control: instancias tomadas DIRECTAMENTE de la población
-    # objetivo (deberían ser compatibles casi siempre, MMD bajo).
-    instancias_compatibles = de.poblacion[:5]
-    aprobadas_compatibles = filtrar_instancias_por_mmd(
-        instancias_compatibles, pso.poblacion, de.poblacion
-    )
-    print(f"Instancias tomadas de la propia población objetivo -> "
-          f"aprobadas: {aprobadas_compatibles.sum()}/5")
+    # (a) Objetivo con la misma forma que la fuente pero trasladado: la
+    # ubicación la controla Wasserstein, el MMD debe aprobar todo.
+    a = filtrar(fuente[:5], fuente + 300.0)
+    print(f"(a) Misma forma, objetivo trasladado +300   -> aprobadas: {a.sum()}/5")
 
-    # Caso de control: instancias claramente fuera de rango/distribución
-    # (en una esquina extrema del espacio de búsqueda).
-    rng = np.random.default_rng(1)
-    instancias_incompatibles = np.tile(
-        problema.limites[:, 1], (5, 1)
-    )  # esquina extrema del espacio: todas las dimensiones en su máximo
-    aprobadas_incompatibles = filtrar_instancias_por_mmd(
-        instancias_incompatibles, pso.poblacion, de.poblacion
-    )
-    print(f"Instancias en la esquina extrema del espacio -> "
-          f"aprobadas: {aprobadas_incompatibles.sum()}/5")
+    # (b) Una élite en la esquina extrema del espacio y cuatro normales:
+    # se rechaza solo la de la esquina (decisión por instancia).
+    candidatas_b = fuente[:5].copy()
+    candidatas_b[0] = problema.limites[:, 1]
+    b = filtrar(candidatas_b, fuente)
+    print(f"(b) Esquina extrema en la posición 0       -> aprobadas: "
+          f"{b.astype(int).tolist()}")
 
-    filtro_funciona = (aprobadas_compatibles.sum() >= 4) and (aprobadas_incompatibles.sum() <= 1)
+    # (c) Cinco copias de la esquina (varianza cero, antiguo D-1e): cada
+    # una se evalúa sola, todas rechazadas.
+    c = filtrar(np.tile(problema.limites[:, 1], (5, 1)), fuente)
+    print(f"(c) Cinco copias de la esquina extrema      -> aprobadas: {c.sum()}/5")
+
+    # (d) Objetivo 5x más concentrado que la fuente (sin colapsar): las
+    # élites quedan fuera de su forma y se rechazan.
+    d = filtrar(fuente[:5], centro + 0.2 * (fuente - centro))
+    print(f"(d) Objetivo 5x más concentrado             -> aprobadas: {d.sum()}/5")
+
+    # (e) Objetivo 5x más disperso: las élites caen dentro de él.
+    e = filtrar(fuente[:5], centro + 5.0 * (fuente - centro))
+    print(f"(e) Objetivo 5x más disperso                -> aprobadas: {e.sum()}/5")
+
+    # (f) Objetivo colapsado a un punto: filtro no aplicable, aprueba
+    # todo (incluida la esquina extrema de (b)).
+    f = filtrar(candidatas_b, centro + 1e-6 * (fuente - centro))
+    print(f"(f) Objetivo colapsado (MMD no aplicable)   -> aprobadas: {f.sum()}/5")
+
+    filtro_funciona = (a.all() and not b[0] and b[1:].all()
+                       and not c.any() and d.sum() <= 1 and e.all()
+                       and f.all())
     print(f"\n{'✅' if filtro_funciona else '❌'} Criterio de filtrado correcto: "
           f"{'APROBADO' if filtro_funciona else 'FALLÓ'}")
     return filtro_funciona
