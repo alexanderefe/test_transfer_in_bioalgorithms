@@ -1,6 +1,6 @@
-# Ejecución del tier MaxFES = 5×10⁷ en el Mac mini (Apple M4)
+# Ejecución del tier MaxFES = 5×10⁷ en el Mac Studio (Apple M2 Ultra)
 
-Guía para correr en el Mac mini **el tier `5×10⁷` completo con los 6
+Guía para correr en el Mac Studio **el tier `5×10⁷` completo con los 6
 algoritmos** (`middleware`, `pso`, `de`, `cmaes`, `madde`, `nlshadersp`):
 6 algoritmos × 12 funciones × 2 dimensiones × 51 semillas = **7 344
 corridas**. El computador Windows (Xeon) corre los otros tres tiers
@@ -10,11 +10,61 @@ parrilla en dos computadores" del [README.md](README.md).
 No requiere cambios de código: todo es configuración del entorno y
 operación.
 
-> **Duración esperada:** el tier `5×10⁷` concentra ~87 % del cómputo de la
-> parrilla (~311 h en el Xeon con 24 workers). El Windows termina su parte
-> en ~2 días y el Mac sigue solo bastante más. En el Mac el tiempo real es
-> desconocido hasta medirlo (ver paso 6): el `--dry-run` de `grid.py` está
-> calibrado para el Xeon y en el Mac es solo orientativo.
+## Equipo
+
+| | |
+|---|---|
+| Modelo | Mac Studio (Mac14,14, MQH63CI/A) |
+| Chip | Apple M2 Ultra: 24 núcleos (16 de rendimiento + 8 de eficiencia), sin Hyper-Threading |
+| Memoria | 64 GB |
+| Sistema | macOS 26.4.1 (25E253), Darwin 25.4.0, arm64 |
+| Disco | 926 GB (457 GB libres al 2026-10-16) |
+| Nombre | `Mac-Studio-Server.local` (es el valor que queda en la columna `host`) |
+
+## Duración esperada
+
+> **ETA: ~4,5 días (~105 h), rango razonable 3,5–6 días (85–140 h)** con
+> 24 workers. Es una extrapolación, no una medición: confirmarla con el ETA
+> de `grid_B.log` tras 4–6 h de ejecución (paso 6).
+
+Cómo se estimó:
+
+- **Base:** el tier `5×10⁷` está estimado en **~311 h en el Xeon E5-2673 v3
+  con 24 workers** (tabla de "Ejecución de la parrilla en dos computadores"
+  del [README.md](README.md)). Esa cifra ya incluye la penalización de
+  correr 24 hilos sobre 12 núcleos con Hyper-Threading (`_FACTOR_CPU` en
+  `experimentos/grid.py`: cada corrida tarda ×2,25–2,54 lo de un núcleo
+  libre).
+- **Rendimiento relativo:** un núcleo de rendimiento del M2 es ~2–2,5× un
+  núcleo Haswell a 3,1 GHz en código Python/Numba escalar, y ~3,5–4,5× un
+  hilo del Xeon con la máquina cargada (frecuencia sostenida menor y núcleo
+  compartido por HT). Un núcleo de eficiencia rinde ~1,3–1,5 hilos del Xeon
+  cargado. En total el Mac rinde **~2,3–3,5× el Xeon (central ~3×)**:
+  311 h / 3 ≈ **105 h**.
+- **Cola final despreciable:** la corrida más larga (DE F12 D=20 o CMA-ES
+  D=20) dura ~2 h en el Xeon y ~0,5–1,5 h en el Mac, según caiga en un
+  núcleo de rendimiento o de eficiencia.
+- **Memoria y disco sobran:** 24 workers con torch/XGBoost ocupan del orden
+  de 10–15 GB de los 64 GB.
+
+Qué puede mover la cifra:
+
+1. La estimación base ya es **±40 % por algoritmo**, y la del middleware no
+   se recalibró tras D-10 (menos activaciones de Fase 2): probablemente
+   sobreestima.
+2. torch y XGBoost en ARM a un hilo están algo menos optimizados que en x86
+   con AVX2; afecta sobre todo a FastSHAP dentro del middleware.
+
+| Computador | Trabajo | Duración estimada |
+|---|---|---|
+| Windows (Xeon, 24 hilos) | tiers `5×10⁴`, `5×10⁵`, `5×10⁶` (22 032 corridas) | ~45 h (~2 días) |
+| Mac Studio (M2 Ultra, 24 núcleos) | tier `5×10⁷` (7 344 corridas) | ~105 h (~4,5 días) |
+| **Parrilla completa** | 29 376 corridas | **~4,5 días** (vs. ~15 días con el Xeon solo) |
+
+Rebalancear (pasarle al Xeon `pso` y `nlshadersp` del `5×10⁷`, ~55 h)
+dejaría ~100 h en el Xeon y ~88 h en el Mac: medio día de ganancia, menor
+que la incertidumbre de la estimación. No se hace: se mantiene cada tier
+completo en un solo computador.
 
 ---
 
@@ -129,11 +179,13 @@ python experimentos/grid.py --salida resultados_B --maxfes 50000000 \
 La primera línea debe decir
 `Parrilla: 7344 corridas (middleware, pso, de, cmaes, madde, nlshadersp) | ya hechas: 0 | pendientes: 7344`
 (sin `--algoritmo`, `grid.py` usa los 6). Las horas estimadas que muestra
-están calibradas para el Xeon: en el Mac no son confiables.
+(~311 h) están calibradas para el Xeon: **en el Mac no aplican**; la
+estimación para este equipo es la de "Duración esperada" (~105 h).
 
-`sysctl -n hw.physicalcpu` da los núcleos físicos (10 en el M4 base, 12 o
-14 en el M4 Pro). El M4 no tiene Hyper-Threading, así que se usa un worker
-por núcleo.
+`sysctl -n hw.physicalcpu` debe dar **24** en el M2 Ultra (16 núcleos de
+rendimiento + 8 de eficiencia). No tiene Hyper-Threading, así que se usa un
+worker por núcleo, incluidos los de eficiencia: aportan ~15 % del
+rendimiento total y el pool reparte las corridas dinámicamente.
 
 ## 6. Comando final: lanzar la ejecución
 
@@ -155,8 +207,10 @@ nohup caffeinate -dims python experimentos/grid.py \
 - `grid_B.log`: progreso y errores. Cada línea es una corrida terminada
   con su estado, su tiempo y un ETA de lo que falta.
 
-Ya se puede cerrar la Terminal. Después de unas horas, el ETA del log da
-una idea realista de la duración en el Mac.
+Ya se puede cerrar la Terminal. **Tras 4–6 h, revisar el ETA del log:** es
+la cifra realista para el Mac. Si queda fuera del rango 85–140 h, la
+extrapolación de "Duración esperada" estaba errada (o algo anda mal: revisar
+que no corra bajo Rosetta, paso 1, y que no haya fallos, paso 8).
 
 ## 7. Configuración del Mac para varios días de ejecución
 
@@ -222,8 +276,9 @@ falta alguna de cualquiera de los dos computadores, lo detecta.
 
 ## 10. Qué documentar en la tesis
 
-- **El tier `5×10⁷` se corrió en Apple M4 (arm64) y el resto en Xeon
-  E5-2673 v3 (x86-64).** Cada algoritmo×tier quedó completo en un solo
+- **El tier `5×10⁷` se corrió en un Mac Studio con Apple M2 Ultra (24
+  núcleos, 64 GB, macOS 26.4.1, arm64) y el resto en Xeon E5-2673 v3
+  (x86-64).** Cada algoritmo×tier quedó completo en un solo
   computador, así que las comparaciones dentro de un tier son con el mismo
   hardware.
 - Los resultados **no son idénticos bit a bit entre arquitecturas** (Numba,

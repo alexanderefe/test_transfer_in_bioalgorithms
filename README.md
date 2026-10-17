@@ -527,13 +527,12 @@ python experimentos/grid.py --salida resultados_A --maxfes 50000000 --algoritmo 
 python experimentos/grid.py --salida resultados_B --maxfes 50000000 --algoritmo middleware,pso,cmaes,madde
 ```
 
-> **Pendiente:** las características del segundo computador aún no se
-> conocen (2026-10-13). Si es más lento o tiene menos hilos, hay que
-> redistribuir: correr `grid.py --dry-run --workers <n>` con el subconjunto
-> de cada computador y mover algoritmos entre ellos, o dividir por
-> semillas (`--semillas 0-25` / `--semillas 26-50`) para un ajuste más
-> fino. La estimación está calibrada para el Xeon; en otra CPU es solo
-> orientativa.
+> **Segundo computador (2026-10-16): Mac Studio con Apple M2 Ultra** (24
+> núcleos sin Hyper-Threading, 64 GB). Rinde ~3× el Xeon, así que la
+> división balanceada de arriba no aplica: el Mac corre **el tier 5×10⁷
+> completo** (~105 h ≈ 4,5 días estimadas, rango 85–140 h) y el Windows los
+> otros tres tiers (~45 h). Parrilla completa en ~4,5 días. Instalación,
+> lanzamiento y detalle de la estimación en [README_MAC.md](README_MAC.md).
 
 **Requisitos para unir las partes:**
 1. **Mismo commit en ambos computadores** (`git log -1`). La columna
