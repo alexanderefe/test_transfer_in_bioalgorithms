@@ -13,8 +13,17 @@ está siendo observado ni que el middleware existe.
 """
 
 from abc import ABC, abstractmethod
+from collections import deque
 from dataclasses import dataclass, field
 import numpy as np
+
+# Snapshots que conserva `historial` (los más recientes). El middleware solo
+# mira hacia atrás VENTANA_HISTORIAL_FUENTE=50 generaciones (Fase 2, y su
+# condición de activación `len(historial) > 50`) y VENTANA_FIR+1=21 (Fase 1);
+# el orquestador verifica al importar que este largo alcanza para ambas.
+# Guardar el historial completo costaba ~0.8-1.4 GB por corrida a MaxFES=5×10⁶
+# (~83 000 generaciones por algoritmo) y llenó la RAM con 24 workers.
+LARGO_HISTORIAL = 64
 
 # Dimensiones del espacio latente común del Canal A (D-10,
 # docs/configuracion_experimental.md). Cada algoritmo traduce sus propios
@@ -124,7 +133,9 @@ class AlgoritmoBioinspirado(ABC):
         self.funcion_objetivo = _funcion_objetivo_contada
 
         self.iteracion_actual = 0
-        self.historial: list[EstadoIteracion] = []
+        # Acotado a los últimos LARGO_HISTORIAL snapshots; el número de
+        # generación es `iteracion_actual`, no len(historial).
+        self.historial: deque[EstadoIteracion] = deque(maxlen=LARGO_HISTORIAL)
 
         self.poblacion: np.ndarray = None
         self.fitness: np.ndarray = None
@@ -205,7 +216,7 @@ class AlgoritmoBioinspirado(ABC):
         recientes para calcular FIR) y Fase 2 (extracción, que necesita
         el historial completo del algoritmo fuente).
         """
-        return self.historial[-ventana:]
+        return list(self.historial)[-ventana:]
 
     def aplicar_correccion_limites(self, poblacion: np.ndarray) -> np.ndarray:
         """

@@ -35,7 +35,7 @@ import os
 # corrida. Con los pools por defecto de torch/BLAS/Numba, N workers abren N×n
 # hilos y se pelean los núcleos (medido: corridas 3-5× más lentas con 12
 # workers). Debe fijarse ANTES de importar numpy/torch; los hijos de
-# ProcessPoolExecutor heredan el entorno.
+# multiprocessing.Pool heredan el entorno.
 for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
              "NUMBA_NUM_THREADS"):
     os.environ.setdefault(_var, "1")
@@ -45,7 +45,7 @@ import itertools
 import math
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Pool
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -248,6 +248,12 @@ def main() -> None:
     # calibrado a esa carga.
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--max-epochs-fastshap", type=int, default=EPOCHS_EXPLAINER)
+    # Cada worker se reemplaza por uno nuevo tras N corridas: torch/XGBoost y
+    # el allocator no devuelven toda la memoria entre corridas y, a lo largo
+    # de ~900 corridas por worker, la deriva se acumula (ver LARGO_HISTORIAL
+    # en bioalgorithms/base.py para la causa principal del OOM de 2026-10-17).
+    ap.add_argument("--tareas-por-worker", type=int, default=20,
+                    help="corridas antes de reciclar cada proceso worker (0 = nunca)")
     ap.add_argument("--salida", default="resultados",
                     help="carpeta de resultados de esta ejecución (se crea si no existe); "
                          "usar la misma en consolidar.py --salida y analisis/main.py --resultados")
@@ -327,10 +333,13 @@ def main() -> None:
 
     t0 = time.time()
     ok = fallo = 0
-    with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futuros = {ex.submit(_tarea, t): t for t in pendientes}
-        for n, fut in enumerate(as_completed(futuros), 1):
-            rid, estado, seg = fut.result()
+    # multiprocessing.Pool y no ProcessPoolExecutor: en Python 3.14.4 el
+    # max_tasks_per_child de este último se cuelga al reciclar el primer
+    # worker (verificado con un ejemplo mínimo); maxtasksperchild de Pool sí
+    # funciona.
+    with Pool(args.workers, maxtasksperchild=args.tareas_por_worker or None) as pool:
+        for n, (rid, estado, seg) in enumerate(
+                pool.imap_unordered(_tarea, pendientes, chunksize=1), 1):
             ok += estado == "ok"
             fallo += estado != "ok"
             transc = time.time() - t0

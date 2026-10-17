@@ -65,6 +65,14 @@ from middleware.barrera_seguridad import (
     evaluar_barrera_wasserstein, filtrar_instancias_por_mmd,
     objetivo_colapsado, ResultadoBarreraSeguridad,
 )
+from middleware.deteccion import VENTANA_FIR as _VENTANA_FIR
+from bioalgorithms.base import LARGO_HISTORIAL
+
+# El historial de cada algoritmo está acotado (bioalgorithms/base.py); si
+# fuera más corto que las ventanas de Fase 1/2, la condición de activación
+# `len(hist_fuente) > VENTANA_HISTORIAL_FUENTE` no se cumpliría nunca.
+assert LARGO_HISTORIAL > max(VENTANA_HISTORIAL_FUENTE, _VENTANA_FIR + 1), (
+    "LARGO_HISTORIAL no alcanza para las ventanas del middleware")
 
 
 # ─── Estructuras del log ─────────────────────────────────────────────────────
@@ -294,8 +302,8 @@ class Orquestador:
         """
         if self._modo_fes:
             return self.problema.fes
-        return min(len(self.algoritmo_a.historial),
-                   len(self.algoritmo_b.historial))
+        return min(self.algoritmo_a.iteracion_actual,
+                   self.algoritmo_b.iteracion_actual)
 
     def _kwargs_activacion(self) -> dict:
         """kwargs extra para calcular_score() que fijan el warm-up del 15%
@@ -915,8 +923,8 @@ class Orquestador:
             if terminado_a and terminado_b:
                 break
 
-            iteracion_actual = min(len(self.algoritmo_a.historial),
-                                   len(self.algoritmo_b.historial))
+            iteracion_actual = min(self.algoritmo_a.iteracion_actual,
+                                   self.algoritmo_b.iteracion_actual)
             reloj_actual = self._reloj()
 
             # ── ESTADO: Canal A activo ────────────────────────────────────
@@ -967,8 +975,8 @@ class Orquestador:
                 reloj_monitoreo = self._reloj()
 
         t_total = time.time() - t_inicio
-        self.resumen.n_generaciones_a = len(self.algoritmo_a.historial)
-        self.resumen.n_generaciones_b = len(self.algoritmo_b.historial)
+        self.resumen.n_generaciones_a = self.algoritmo_a.iteracion_actual
+        self.resumen.n_generaciones_b = self.algoritmo_b.iteracion_actual
         self.resumen.n_iteraciones_totales = max(
             self.resumen.n_generaciones_a, self.resumen.n_generaciones_b)
         self.resumen.max_fes = self.max_fes or 0
