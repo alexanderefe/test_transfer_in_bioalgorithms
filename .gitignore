@@ -49,3 +49,14 @@ Avance 1/
 
 # Archivo basura de una redirección de shell fallida (pip ... 'tqdm>=4.65')
 /4.65
+
+# Resultados crudos de la parrilla repartida en dos computadores (README_MAC):
+# Ubuntu (resultados_A) y Mac Studio (resultados_MAC), más sus comprimidos.
+resultados_A/
+resultados_MAC/
+# De la unión solo se versionan los consolidados (insumo de analisis/main.py).
+Resultados_Union/*
+!Resultados_Union/corridas.parquet
+!Resultados_Union/corridas_propuesto.parquet
+resultados_ubuntu.zip
+resultados_MAC.zip
