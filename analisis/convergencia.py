@@ -59,6 +59,16 @@ COLOR_ALGORITMO = {
     "cmaes": "#9467bd",
     "madde": "#ff7f0e",
     "nlshadersp": "#8c564b",
+    # Referencia por familia (aún fuera de ALGORITMOS; ver analisis/datos.py)
+    "ga": "#e377c2",
+    "jde": "#7f7f7f",
+    "jade": "#bcbd22",
+    "clpso": "#17becf",
+    "gwo": "#aec7e8",
+    "abc": "#ffbb78",
+    "clonalg": "#98df8a",
+    "optainet": "#c5b0d5",
+    "gco": "#c49c94",
 }
 
 

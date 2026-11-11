@@ -28,7 +28,22 @@ NOMBRE_ALGORITMO = {
     "cmaes": "IPOP-CMA-ES",
     "madde": "MadDE",
     "nlshadersp": "NL-SHADE-RSP",
+    # Referencia por familia (docs/competidores.md §8)
+    "ga": "GA",
+    "jde": "jDE",
+    "jade": "JADE",
+    "clpso": "CLPSO",
+    "gwo": "GWO",
+    "abc": "ABC",
+    "clonalg": "CLONALG",
+    "optainet": "opt-aiNet",
+    "gco": "GCO",
 }
+# Algoritmos de referencia por familia. NO forman parte de ALGORITMOS (que
+# fija el conjunto exacto que exige `cargar_corridas` y entra a Friedman /
+# Shaffer / Wilcoxon) hasta decidir si van al mismo ranking que los
+# competidores o a un análisis aparte, y hasta que la parrilla los incluya.
+ALGORITMOS_REFERENCIA = ("ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet", "gco")
 DIMS = (10, 20)
 MAXFES = (50_000, 500_000, 5_000_000, 50_000_000)
 N_FUNCIONES = 12

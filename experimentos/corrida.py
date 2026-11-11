@@ -14,6 +14,9 @@ Algoritmos disponibles (docs/configuracion_experimental.md):
   - "cmaes", "madde", "nlshadersp": competidores externos (D-8) —
     IPOP-CMA-ES, MadDE y NL-SHADE-RSP, corriendo solos como caja negra con
     los parámetros de sus autores (ver `experimentos/competidores/`).
+  - "ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet":
+    algoritmos de referencia por familia (docs/competidores.md §8), con el
+    mismo protocolo de caja negra que los competidores externos.
 """
 
 from __future__ import annotations

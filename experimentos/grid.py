@@ -64,7 +64,9 @@ DIMS_VALIDAS = (10, 20)
 
 # Algoritmos implementados: el propuesto, sus dos algoritmos base corriendo
 # SOLOS como baseline (D-4) y los tres competidores externos (D-8).
-ALGORITMOS_VALIDOS = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp")
+ALGORITMOS_VALIDOS = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp",
+                      # referencia por familia (docs/competidores.md §8)
+                      "ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet", "gco")
 
 # Overhead constante de Python por evaluación (µs), medido en esta máquina,
 # INDEPENDIENTE de la función (no es costo del objetivo, es el bucle del
@@ -122,6 +124,19 @@ _COSTO_US_POR_EVAL = {
     "cmaes": (176.7, 239.6),
     "madde": (44.7, 30.0),
     "nlshadersp": (63.2, 49.9),
+    # Referencia por familia — PROVISIONAL (2026-11-10): medido en UN solo
+    # proceso (F1, F6, F10; MaxFES = 2·10⁴) y multiplicado por el factor de
+    # carga de 24 workers de PSO/DE (2.54). Reemplazar con el piloto bajo
+    # carga completa (paso 10), como se hizo con los competidores D-8.
+    "ga": (88.7 * 2.54, 91.2 * 2.54),
+    "jde": (143.2 * 2.54, 163.8 * 2.54),
+    "jade": (159.6 * 2.54, 163.7 * 2.54),
+    "clpso": (69.1 * 2.54, 75.2 * 2.54),
+    "gwo": (63.7 * 2.54, 68.5 * 2.54),
+    "abc": (18.0 * 2.54, 17.9 * 2.54),
+    "clonalg": (12.5 * 2.54, 11.5 * 2.54),
+    "optainet": (8.6 * 2.54, 9.7 * 2.54),
+    "gco": (225.9 * 2.54, 216.8 * 2.54),
 }
 _DECAIMIENTO_POR_DECADA = {"cmaes": (0.81, 0.72)}
 

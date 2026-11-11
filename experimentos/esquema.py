@@ -22,6 +22,16 @@ FAMILIA_ALGORITMO = {
     "cmaes": "distribucion",
     "madde": "DE",
     "nlshadersp": "DE",
+    # Referencia por familia (docs/competidores.md §8)
+    "ga": "evolutivo",
+    "jde": "evolutivo",
+    "jade": "evolutivo",
+    "clpso": "enjambre",
+    "gwo": "enjambre",
+    "abc": "enjambre",
+    "clonalg": "inmune",
+    "optainet": "inmune",
+    "gco": "inmune",
 }
 
 # ── §11.2 · tabla `corridas` ────────────────────────────────────────────────
