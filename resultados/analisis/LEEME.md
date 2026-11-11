@@ -1,5 +1,9 @@
 # Cómo leer `resultados/analisis/`
 
+> **Histórico.** Esta carpeta corresponde al protocolo anterior (3
+> algoritmos, MaxFES 5·10³…5·10⁶). El análisis vigente de la parrilla
+> completa está en `Resultados_Union/analisis/` — ver su `LEEME.md`.
+
 Todo lo de esta carpeta sale de `resultados/corridas.parquet` (14 688
 corridas: 3 algoritmos × 2 dimensionalidades × 4 MaxFES × 12 funciones ×
 51 semillas), calculado por `analisis/` — ver `docs/setup_experimental.md`
