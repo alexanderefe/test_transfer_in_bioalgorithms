@@ -62,7 +62,11 @@ Fase_pruebas/
 │   ├── test_orquestador_threading2.py         # ídem, par PSO↔PSO
 │   ├── test_orquestador_threading_maxfes.py   # integración completa — vía MaxFES
 │   ├── test_determinismo_orquestador.py       # criterio de aceptación de D-2
-│   └── test_experimentos.py                   # smoke del harness (los 6 algoritmos)
+│   ├── test_experimentos.py                   # smoke del harness (los 15 algoritmos)
+│   ├── test_adaptadores_librerias.py          # adaptadores NiaPy/mealpy: MaxFES exacto, semilla, excepciones
+│   ├── test_referencias_familia.py            # protocolo de los 9 algoritmos de referencia (D=10 y 20)
+│   ├── test_opt_ainet_reproduccion.py         # opt-aiNet vs. Timmis y Edmonds 2004 (Multi, Roots)
+│   └── test_gco_reproduccion.py               # GCO vs. Villaseñor et al. 2018 (Tabla 2; Tabla 4 informativa)
 │
 ├── experimentos/           # harness: semillas fijas, corrida única, parrilla, consolidación
 │   ├── semillas.json · semillas.py · generar_semillas.py
@@ -70,12 +74,24 @@ Fase_pruebas/
 │   ├── corrida.py          # correr_corrida(algoritmo, func, dim, max_fes, semilla)
 │   │                       #   algoritmos: "middleware" | "pso" | "de" (D-4, solos)
 │   │                       #   | "cmaes" | "madde" | "nlshadersp" (D-8, competidores externos)
-│   ├── competidores/       # D-8: caja negra correr(problema, max_fes, semilla), corte exacto en MaxFES
+│   │                       #   | "ga" | "jde" | "jade" | "clpso" | "gwo" | "abc"
+│   │                       #   | "clonalg" | "optainet" | "gco" (referencia por familia)
+│   ├── competidores/       # caja negra correr(problema, max_fes, semilla), corte exacto en MaxFES
 │   │   ├── base.py         #   Presupuesto / PresupuestoAgotado
-│   │   ├── cmaes_ipop.py   #   IPOP-CMA-ES sobre `cma` 4.5.0
-│   │   ├── madde.py        #   port del MATLAB oficial de MadDE
-│   │   └── nlshade_rsp.py  #   port del C++ oficial de NL-SHADE-RSP
-│   ├── grid.py             # parrilla resumible + paralela (--algoritmo, default: los 6; --dry-run)
+│   │   ├── cmaes_ipop.py   #   IPOP-CMA-ES sobre `cma` 4.5.0                     (D-8)
+│   │   ├── madde.py        #   port del MATLAB oficial de MadDE                  (D-8)
+│   │   ├── nlshade_rsp.py  #   port del C++ oficial de NL-SHADE-RSP              (D-8)
+│   │   ├── adaptador_niapy.py / adaptador_mealpy.py  # puente común a esas librerías
+│   │   ├── ga_pymoo.py     #   evolutivo: GA real (pymoo, SBX + mutación polinomial)
+│   │   ├── jde.py          #   evolutivo: jDE (NiaPy, parámetros de Brest 2006)
+│   │   ├── jade.py         #   evolutivo: JADE (mealpy corregido)
+│   │   ├── clpso.py        #   enjambre: port de CLPSO_new_func.m de los autores
+│   │   ├── gwo.py          #   enjambre: GWO (NiaPy)
+│   │   ├── abc_karaboga.py #   enjambre: ABC (NiaPy corregido según ABC.C oficial)
+│   │   ├── clonalg_aisp.py #   inmune: CLONALG (aisp)
+│   │   ├── opt_ainet.py    #   inmune: opt-aiNet (implementación propia, Timmis y Edmonds 2004)
+│   │   └── gco.py          #   inmune: Germinal Center Optimization (mealpy)
+│   ├── grid.py             # parrilla resumible + paralela (--algoritmo, default: los 6 principales; --dry-run)
 │   └── consolidar.py       # resultados/corridas/*.parquet -> resultados/corridas.parquet
 │
 ├── analisis/               # rankings, Friedman+Shaffer, Wilcoxon, CD de Nemenyi, figuras, convergencia (k=6)
@@ -83,7 +99,7 @@ Fase_pruebas/
 ├── docs/
 │   ├── setup_experimental.md            # protocolo de evaluación (adaptado del PDF a CEC 2022) + §11 datos
 │   ├── configuracion_experimental.md    # config única congelada + registro de decisiones (D-1a…D-12)
-│   ├── competidores.md                  # roster candidato (27); 3 adoptados en D-8
+│   ├── competidores.md                  # roster candidato (27); 3 adoptados en D-8; §8: revisión de los 9 de referencia
 │   ├── cambios_informe_avance1.md       # bitácora de edición del informe LaTeX de Avance 1
 │   └── cambios_presentacion_avances.md  # bitácora de edición de la presentación de avances
 │
@@ -104,8 +120,10 @@ Fase_pruebas/
 ```bash
 pip install -r requirements.txt
 # o, explícito (comillas obligatorias: sin ellas la shell interpreta '>' como redirección):
-pip install "setuptools<82" "numpy>=1.24" "scipy>=1.10" "opfunu>=1.0.4" "torch>=2.0" "xgboost>=2.0" "scikit-learn>=1.3" "tqdm>=4.65" "pandas>=2.0" "pyarrow>=15.0" "numba>=0.67" "cma==4.5.0"
+pip install "setuptools<82" "numpy>=1.24" "scipy>=1.10" "opfunu>=1.0.4" "torch>=2.0" "xgboost>=2.0" "scikit-learn>=1.3" "tqdm>=4.65" "pandas>=2.0" "pyarrow>=15.0" "numba>=0.67" "cma==4.5.0" "niapy==2.7.1" "pymoo==0.6.2" "aisp==0.5.5" "mealpy @ git+https://github.com/thieu1995/mealpy.git@46b9850bdd6949a992372d03ed280b6302807d8d"
 ```
+
+> **Nota:** `mealpy` se instala desde GitHub con el commit fijado (versión 3.1.0). La 3.0.3 de PyPI exige `numpy<=1.26`, que no compila en Python 3.14 y además bajaría el numpy del proyecto.
 
 > **Nota:** `fastshap` no está disponible en PyPI para Python 3.14. Se incluye como código fuente en `fastshap_lib/` con un parche de compatibilidad para PyTorch ≥ 2.0 ya aplicado. No instalar por pip.
 
@@ -370,7 +388,51 @@ Algoritmo B (objetivo) ─┘   Round-robin: una generación de A, una de B, alt
 - Costo: **+14 688 corridas, ~172 h (~7.2 días) con 24 workers**. Detalle
   en `docs/configuracion_experimental.md` D-8.
 
+**Algoritmos de referencia por familia (2026-11-10)** — trabajo futuro del
+Avance 2, detalle en `docs/competidores.md` §8:
+- Tres por familia de algoritmos bioinspirados, como **referencia de
+  comparación** (no compiten directamente con el middleware):
+
+  | Familia | id | Algoritmo | Fuente |
+  |---|---|---|---|
+  | Evolutivos | `ga` | GA real | `pymoo` 0.6.2 (SBX + mutación polinomial) |
+  | | `jde` | jDE | NiaPy 2.7.1 con los parámetros de Brest et al. (2006) |
+  | | `jade` | JADE | mealpy corregido según Zhang y Sanderson (2009) |
+  | Enjambre | `clpso` | CLPSO | Port de `CLPSO_new_func.m` (código de los autores) |
+  | | `gwo` | GWO | NiaPy 2.7.1 |
+  | | `abc` | ABC | NiaPy corregido para reproducir `ABC.C` oficial de Karaboga |
+  | Inmunes | `clonalg` | CLONALG | `aisp` 0.5.5 |
+  | | `optainet` | opt-aiNet | Implementación propia (Timmis y Edmonds 2004) |
+  | | `gco` | Germinal Center Optimization | mealpy (Villaseñor et al. 2018) |
+
+- Cada fuente se revisó contra su paper o código original **antes** de
+  integrarla. Se descartaron por errores de implementación el GA y el
+  CLONALG de NiaPy, el `CL_PSO` de mealpy y el CLONALG de pyMetaheuristic
+  (los dos CLONALG rinden peor que una búsqueda aleatoria en CEC 2022).
+- opt-aiNet reproduce los resultados publicados por Timmis y Edmonds; GCO
+  reproduce la Tabla 2 de su paper (2-D) pero no la Tabla 4 (30-D), por una
+  ambigüedad del pseudocódigo que los autores no resuelven con código
+  publicado. GCO reemplaza a opt-IA, cuyos papers son de acceso cerrado.
+- Registrados en el harness (`COMPETIDORES`, `ALGORITMOS_VALIDOS`,
+  `FAMILIA_ALGORITMO`, familias `evolutivo` / `enjambre` / `inmune`). En
+  `analisis/` van en `ALGORITMOS_REFERENCIA`, **aparte de `ALGORITMOS`**,
+  hasta decidir si entran al mismo ranking; así el análisis de la parrilla
+  principal sigue cargando. `grid.py` no los corre por defecto: se piden
+  con `--algoritmo ga,jde,jade,clpso,gwo,abc,clonalg,optainet,gco`.
+- Costo provisional (un solo proceso × factor de carga, pendiente del
+  piloto): **44 064 corridas, ~1 607 h (~67 días) con 24 workers**, ~90 %
+  en el tier `5×10⁷`; GCO solo aporta ~442 h.
+
 ### Pendiente ⏳ — en orden recomendado
+
+**Algoritmos de referencia por familia — decisiones abiertas:**
+1. Piloto de costo bajo carga completa (216 corridas por algoritmo a
+   `5×10⁵`) para reemplazar los `_COSTO_US_POR_EVAL` provisionales.
+2. Alcance de su parrilla: los 4 tiers (~67 días) o hasta `5×10⁶`
+   (~1 semana).
+3. Análisis: mismo ranking que los competidores (k = 15) o análisis aparte.
+4. Opcional: pedir a los autores de GCO su código para resolver la
+   ambigüedad del muestreo de r₁, r₂, r₃.
 
 **Alcance ya fijado (no reabrir sin motivo):** evaluación **solo sobre CEC 2022**
 (12 funciones, D∈{10,20}) — no se amplía a CEC 2014/2017 ni D=50 (reconfirmado
@@ -379,7 +441,9 @@ no define datos para esa dimensión). La Fase 4
 (cierre formal del ciclo, con ΔScore estructurado y auditoría SHAP) **no se
 implementa en código**: se aborda únicamente en la redacción de la tesis.
 Competidores = **PSO y DE corriendo solos** (D-4) **+ IPOP-CMA-ES, MadDE y
-NL-SHADE-RSP** (D-8) — 6 algoritmos por ranking, no el roster de ~22.
+NL-SHADE-RSP** (D-8) — 6 algoritmos por ranking, no el roster de ~22. Los 9
+algoritmos de referencia por familia (2026-11-10) son un agregado aparte,
+cuyo análisis está por decidir (ver arriba).
 
 > **✅ D-9 (2026-10-12) — evaluador corregido: TODOS los resultados
 > anteriores quedan inválidos.** El CEC 2022 de `opfunu`, que el backend
@@ -644,6 +708,10 @@ pandas>=2.0          # harness experimental: resultados en Parquet
 pyarrow>=15.0        # backend Parquet de pandas
 numba>=0.67          # evaluador CEC2022 compilado (D-5); wheel cp314, sin toolchain C
 cma==4.5.0           # IPOP-CMA-ES, competidor externo (D-8)
+niapy==2.7.1         # referencia por familia: jDE, GWO, ABC (corregido)
+pymoo==0.6.2         # referencia por familia: GA real
+aisp==0.5.5          # referencia por familia: CLONALG
+mealpy @ git+https://github.com/thieu1995/mealpy.git@46b9850…  # JADE, GCO (3.1.0; la 3.0.3 de PyPI exige numpy<=1.26)
 # fastshap: incluido como código fuente en fastshap_lib/ (no instalar por pip)
 # POT: descartado (incompatible con Python 3.14 en Windows) → Wasserstein vía scipy.linprog
 ```
@@ -683,8 +751,8 @@ cma==4.5.0           # IPOP-CMA-ES, competidor externo (D-8)
 
 | Archivo | Qué hace | Dónde continuar |
 |---|---|---|
-| `experimentos/corrida.py` | `correr_corrida(algoritmo, funcion, dim, max_fes, idx_semilla)` — `"middleware"`, `"pso"`, `"de"`, `"cmaes"`, `"madde"`, `"nlshadersp"` | Punto de entrada para una corrida suelta |
-| `experimentos/competidores/` | IPOP-CMA-ES, MadDE, NL-SHADE-RSP (D-8): `correr(problema, max_fes, semilla)` + `VERSION` | Para agregar otro competidor: módulo nuevo + entrada en `COMPETIDORES` (`__init__.py`), `ALGORITMOS_VALIDOS` y `_COSTO_US_POR_EVAL` (`grid.py`), `FAMILIA_ALGORITMO` (`esquema.py`), `ALGORITMOS` (`analisis/datos.py`) |
+| `experimentos/corrida.py` | `correr_corrida(algoritmo, funcion, dim, max_fes, idx_semilla)` — `"middleware"`, `"pso"`, `"de"`, `"cmaes"`, `"madde"`, `"nlshadersp"` y los 9 de referencia (`"ga"`, `"jde"`, `"jade"`, `"clpso"`, `"gwo"`, `"abc"`, `"clonalg"`, `"optainet"`, `"gco"`) | Punto de entrada para una corrida suelta |
+| `experimentos/competidores/` | IPOP-CMA-ES, MadDE, NL-SHADE-RSP (D-8) y los 9 de referencia por familia: `correr(problema, max_fes, semilla)` + `VERSION`; adaptadores comunes para NiaPy y mealpy | Para agregar otro algoritmo: revisar primero su fuente contra el paper (`docs/competidores.md` §8), módulo nuevo + entrada en `COMPETIDORES` (`__init__.py`), `ALGORITMOS_PRINCIPALES` o `ALGORITMOS_REFERENCIA` y `_COSTO_US_POR_EVAL` (`grid.py`), `FAMILIA_ALGORITMO` (`esquema.py`), `ALGORITMOS` o `ALGORITMOS_REFERENCIA` (`analisis/datos.py`) |
 | `experimentos/grid.py` | Parrilla resumible y paralela, `--dry-run` con estimación | **Empezar por acá** para lanzar el experimento — leer §Pendiente arriba primero |
 | `experimentos/consolidar.py` | Une los Parquet por corrida | Correr después de cada lote de `grid.py` |
 | `experimentos/esquema.py` | Esquema único de columnas (§11.2/§11.3) | Los módulos de `analisis/` importan de acá, no redefinir |
@@ -697,7 +765,10 @@ cma==4.5.0           # IPOP-CMA-ES, competidor externo (D-8)
 | `tests/test_determinismo_orquestador.py` | **Criterio de aceptación de D-2** — correr antes de tocar `orquestador.py` |
 | `tests/test_cec2022_numba_paridad.py` | **Gate de fidelidad (D-5 → D-9)** — anclas del C oficial + paridad contra la referencia oficial (óptimo, vecindades del óptimo, aleatorios, esquinas) + nada bajo f(x*), 12 funciones × 2 dims — correr antes de tocar `problems/cec2022_numba.py` |
 | `tests/test_orquestador_threading_maxfes.py` / `test_orquestador_threading.py` / `test_orquestador_threading2.py` | Integración completa, vía MaxFES / clásica (nombres históricos: ya no usan threading) |
-| `tests/test_experimentos.py` | Smoke del harness: los 6 algoritmos (corte exacto en MaxFES, checkpoints, determinismo y `version` de los competidores) |
+| `tests/test_experimentos.py` | Smoke del harness: los 15 algoritmos (corte exacto en MaxFES, checkpoints, determinismo y `version` de los competidores) |
+| `tests/test_adaptadores_librerias.py` | Adaptadores NiaPy/mealpy: MaxFES exacto (también cuando coincide con el fin de una generación), determinismo, excepciones desde hilos secundarios, historial acotado |
+| `tests/test_referencias_familia.py` | Los 9 de referencia en D = 10 y 20: MaxFES exacto, traza monótona, determinismo, `VERSION` |
+| `tests/test_opt_ainet_reproduccion.py` / `test_gco_reproduccion.py` | Reproducción de resultados publicados (opt-aiNet: Timmis y Edmonds 2004; GCO: Villaseñor et al. 2018) — GCO tarda ~15 min |
 | `tests/test_fase0…test_fase3_transferencia_exitosa.py` | Unitarios por fase; criterios alineados con lo que aplica el código (D-12): Fase 2 exige R² ≥ 0 (no 0.7), los de Fase 3 respetan el bloqueo por R² < 0 y verifican la regla W₁ > θ_W; `test_fase3_transferencia_exitosa` usa F2/D=10 |
 | `tests/test_fase3_barrera_wasserstein_orquestador.py` | **Barrera de Wasserstein en el orquestador (D-11)**: aborto con estado limpio y cooldown, sin efectos si se permite; θ_W=0 aborta todo (sin inyecciones), θ_W=∞ nunca aborta y el log registra W₁/θ_W reales |
 | `tests/test_fase3_canal_a_heterogeneo.py` | **Canal A PSO↔DE (D-10)**: mapas del espacio común, interpolación exacta, desplazamiento del calendario de PSO, ambos sentidos en el orquestador, y comparación con/sin Canal A heterogéneo (se reporta, no se exige) |

@@ -64,9 +64,13 @@ DIMS_VALIDAS = (10, 20)
 
 # Algoritmos implementados: el propuesto, sus dos algoritmos base corriendo
 # SOLOS como baseline (D-4) y los tres competidores externos (D-8).
-ALGORITMOS_VALIDOS = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp",
-                      # referencia por familia (docs/competidores.md §8)
-                      "ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet", "gco")
+# Parrilla principal: el propuesto, PSO/DE solos y los competidores D-8. Es el
+# default de --algoritmo y el conjunto que exige analisis/ (ALGORITMOS).
+ALGORITMOS_PRINCIPALES = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp")
+# Algoritmos de referencia por familia (docs/competidores.md §8): se corren
+# solo si se piden explícitamente con --algoritmo.
+ALGORITMOS_REFERENCIA = ("ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet", "gco")
+ALGORITMOS_VALIDOS = ALGORITMOS_PRINCIPALES + ALGORITMOS_REFERENCIA
 
 # Overhead constante de Python por evaluación (µs), medido en esta máquina,
 # INDEPENDIENTE de la función (no es costo del objetivo, es el bucle del
@@ -252,8 +256,10 @@ def _tarea(args):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--algoritmo", default=",".join(ALGORITMOS_VALIDOS),
-                    help=f"lista separada por comas, de {ALGORITMOS_VALIDOS}")
+    ap.add_argument("--algoritmo", default=",".join(ALGORITMOS_PRINCIPALES),
+                    help=f"lista separada por comas, de {ALGORITMOS_VALIDOS} "
+                         f"(default: la parrilla principal; los de referencia por "
+                         f"familia, {','.join(ALGORITMOS_REFERENCIA)}, hay que pedirlos)")
     ap.add_argument("--funciones", default="1-12")
     ap.add_argument("--dims", default="10,20")
     ap.add_argument("--maxfes", default="50000,500000,5000000,50000000")
