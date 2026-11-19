@@ -67,3 +67,12 @@ Resultados_Union/analisis/*
 !Resultados_Union/analisis/LEEME.md
 resultados_ubuntu.zip
 resultados_MAC.zip
+
+# Algoritmos de referencia (README_MAC_REFERENCIA.md): piloto del Xeon y
+# parrilla completa del Mac.
+resultados_piloto_referencia/
+resultados_ref_MAC/
+resultados_ref_MAC.tar.gz
+piloto_referencia*.log
+piloto_ref_MAC.log
+grid_ref_*.log
