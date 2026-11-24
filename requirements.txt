@@ -21,3 +21,7 @@ aisp==0.5.5        # CLONALG (clonalg_aisp.py); las versiones de NiaPy y pyMetah
 # mealpy (JADE, CLPSO): la 3.0.3 de PyPI exige numpy<=1.26 (no compila en Python 3.14);
 # se fija el commit de GitHub correspondiente a la 3.1.0, que ya no tiene esa restricción.
 mealpy @ git+https://github.com/thieu1995/mealpy.git@46b9850bdd6949a992372d03ed280b6302807d8d
+# BBOB (README_BBOB.md): suite bbob oficial de COCO (código C, wheel cp314 para
+# Windows x64 y macOS arm64) y su post-procesamiento (ECDF, archivo de datos de COCO).
+coco-experiment==2.8.4
+cocopp==2.9.4

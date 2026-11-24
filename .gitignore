@@ -85,3 +85,15 @@ resultados_ref_MAC.tar.gz
 piloto_referencia*.log
 piloto_ref_MAC.log
 grid_ref_*.log
+
+# BBOB (README_BBOB.md): COCO escribe relativo a ./exdata/ (queda vacía); de
+# los resultados solo se versionan los consolidados, como en resultados/.
+exdata/
+resultados_bbob*/corridas/
+resultados_bbob*/corridas_propuesto/
+resultados_bbob*/logs_middleware/
+resultados_bbob*/fallos/
+resultados_bbob*/coco/
+resultados_bbob*/ppdata/
+resultados_bbob*.tar.gz
+grid_bbob*.log

@@ -109,6 +109,14 @@ def run_id(algoritmo: str, funcion: int, dim: int, max_fes: int,
             f"__fes{int(max_fes)}__s{idx_semilla:02d}")
 
 
+def run_id_bbob(algoritmo: str, funcion: int, dim: int, instancia: int,
+                max_fes: int) -> str:
+    """Identificador de una corrida BBOB (README_BBOB.md). Lleva el prefijo
+    `bbob__` para que nunca coincida con un run_id de CEC 2022."""
+    return (f"bbob__{algoritmo}__f{funcion:02d}__d{dim:02d}"
+            f"__i{instancia:02d}__fes{int(max_fes)}")
+
+
 def conjunto(dim: int) -> str:
     return f"CEC2022_{dim}"
 
@@ -127,16 +135,19 @@ def fila_corrida(meta: dict, *, estado: str, problema=None,
     y `problema.error_checkpoints()`. No depende de `ResumenEjecucion`.
     """
     fila = {c: None for c in COLUMNAS_CORRIDA}
+    # `benchmark`, `conjunto` y `run_id` pueden venir en `meta` (BBOB,
+    # experimentos/corrida_bbob.py); sin ellos, los valores de CEC 2022.
     fila.update({
-        "run_id": run_id(meta["algoritmo"], meta["funcion"], meta["dim"],
-                         meta["max_fes"], meta["idx_semilla"]),
+        "run_id": meta.get("run_id") or run_id(
+            meta["algoritmo"], meta["funcion"], meta["dim"],
+            meta["max_fes"], meta["idx_semilla"]),
         "algoritmo": meta["algoritmo"],
         "familia": FAMILIA_ALGORITMO.get(meta["algoritmo"], "desconocida"),
         "version": meta.get("version", ""),
-        "benchmark": "CEC2022",
+        "benchmark": meta.get("benchmark", "CEC2022"),
         "funcion": int(meta["funcion"]),
         "dim": int(meta["dim"]),
-        "conjunto": conjunto(meta["dim"]),
+        "conjunto": meta.get("conjunto") or conjunto(meta["dim"]),
         "max_fes": int(meta["max_fes"]),
         "idx_semilla": int(meta["idx_semilla"]),
         "semilla": int(meta["semilla"]),
@@ -172,8 +183,9 @@ def fila_propuesto(meta: dict, resumen, *, ruta_log_json: str = "") -> dict:
     fpa = float(resumen.fes_primera_activacion)
     r2 = [float(e["r2_modelo_subrogado"]) for e in resumen.log_fase2]
     return {
-        "run_id": run_id(meta["algoritmo"], meta["funcion"], meta["dim"],
-                         max_fes, meta["idx_semilla"]),
+        "run_id": meta.get("run_id") or run_id(
+            meta["algoritmo"], meta["funcion"], meta["dim"],
+            max_fes, meta["idx_semilla"]),
         "funcion": int(meta["funcion"]),
         "dim": int(meta["dim"]),
         "max_fes": max_fes,
