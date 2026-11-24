@@ -36,6 +36,9 @@ from pathlib import Path
 import numpy as np
 
 from problems.cec2022_wrapper import FRACCIONES_CHECKPOINT, UMBRAL_ERROR_CERO
+from problems.bbob_meta import (  # noqa: F401 — reexportados
+    DIMENSIONES_BBOB, FUNCIONES_BBOB, GRUPO_BBOB, GRUPOS_BBOB, INSTANCIAS_BBOB, NOMBRES_BBOB,
+)
 
 import cocoex
 
@@ -43,37 +46,9 @@ import cocoex
 # (25 920 líneas en el log de la parrilla); los errores se siguen mostrando.
 cocoex.log_level("warning")
 
-FUNCIONES_BBOB = tuple(range(1, 25))
-DIMENSIONES_BBOB = (2, 3, 5, 10, 20, 40)
-INSTANCIAS_BBOB = tuple(range(1, 16))      # instancias clásicas 2009 (1..15)
-
 # Etiqueta del evaluador, va a la columna `version` (como VERSION_EVALUADOR
 # de CEC 2022): grid_bbob.py la usa para no reanudar corridas de otra versión.
 VERSION_EVALUADOR_BBOB = f"bbob-coco{cocoex.__version__}"
-
-# Nombre de cada función (Hansen et al., 2009, "Real-parameter black-box
-# optimization benchmarking 2009: noiseless functions definitions").
-NOMBRES_BBOB = {
-    1: "Sphere", 2: "Ellipsoidal separable", 3: "Rastrigin separable",
-    4: "Bueche-Rastrigin", 5: "Linear slope",
-    6: "Attractive sector", 7: "Step ellipsoidal", 8: "Rosenbrock original",
-    9: "Rosenbrock rotated",
-    10: "Ellipsoidal", 11: "Discus", 12: "Bent cigar", 13: "Sharp ridge",
-    14: "Different powers",
-    15: "Rastrigin", 16: "Weierstrass", 17: "Schaffer F7",
-    18: "Schaffer F7 mal condicionada", 19: "Griewank-Rosenbrock F8F2",
-    20: "Schwefel x*sin(x)", 21: "Gallagher 101 picos", 22: "Gallagher 21 picos",
-    23: "Katsuura", 24: "Lunacek bi-Rastrigin",
-}
-
-# Grupos estándar de COCO, para el análisis por grupo de funciones.
-GRUPO_BBOB = {
-    **{f: "separables" for f in range(1, 6)},
-    **{f: "condicionamiento bajo/moderado" for f in range(6, 10)},
-    **{f: "condicionamiento alto, unimodales" for f in range(10, 15)},
-    **{f: "multimodales, estructura global adecuada" for f in range(15, 20)},
-    **{f: "multimodales, estructura global débil" for f in range(20, 25)},
-}
 
 
 def _suite() -> "cocoex.Suite":

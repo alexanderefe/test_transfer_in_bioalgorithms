@@ -193,16 +193,31 @@ algoritmos lentos primero), así la cola final queda con las cortas.
 
 ```bash
 python experimentos/consolidar.py --salida resultados_bbob
-python analisis/bbob.py --resultados resultados_bbob        # -> resultados_bbob/analisis_bbob/
 
-# Análisis estándar de COCO (ECDF, ERT, tablas). Una carpeta por algoritmo:
-python -m cocopp resultados_bbob/coco/middleware resultados_bbob/coco/cmaes resultados_bbob/coco/de
-# Comparar contra el archivo de datos de COCO (lo descarga cocopp), p. ej.:
-python -m cocopp resultados_bbob/coco/middleware bbob/2009/BIPOP-CMA-ES
+# Análisis estándar de COCO (ECDF, ERT, tablas), los 12 algoritmos, desde la
+# carpeta coco/ para que las leyendas sean los ids (necesita internet la
+# primera vez: descarga la referencia "best 2009" del archivo de COCO):
+cd resultados_bbob/coco
+python -m cocopp -o ../ppdata middleware pso de cmaes madde nlshadersp jade ga clpso abc clonalg optainet
+cd ../..
+
+# Tablas, figuras y LEEME -> resultados_bbob/analisis/ (copia las ECDF agregadas
+# de cocopp a figuras/cocopp/ si se le da --ppdata)
+python analisis/bbob.py --resultados resultados_bbob --ppdata resultados_bbob/ppdata
 ```
 
 `analisis/bbob.py` exige las 25 920 corridas en estado `ok` y un solo
-presupuesto. `--permitir-incompleto` analiza lo que haya, avisando.
+presupuesto. `--permitir-incompleto` analiza lo que haya, avisando. No
+necesita `cocoex`.
+
+**Notebook para Colab:**
+[notebooks/analisis_bbob.ipynb](notebooks/analisis_bbob.ipynb), aparte
+del de CEC (`analisis_resultados.ipynb`). Clona el repositorio, regenera
+`resultados_bbob/analisis/` desde los consolidados y permite recorrer
+tablas y figuras con selectores. En git van solo
+`resultados_bbob/corridas*.parquet`, `analisis/LEEME.md` y
+`analisis/figuras/cocopp/`. Las ECDF van versionadas porque necesitan los
+archivos crudos de `coco/`, que no se suben.
 
 `analisis/main.py` (CEC 2022) **no** lee las corridas BBOB, y así debe
 ser: son conjuntos aparte.

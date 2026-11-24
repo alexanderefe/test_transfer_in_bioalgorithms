@@ -262,18 +262,19 @@ python experimentos/grid_bbob.py --salida resultados_bbob --dry-run | head -1
 # 2) Consolidar -> resultados_bbob/corridas.parquet (+ corridas_propuesto.parquet)
 python experimentos/consolidar.py --salida resultados_bbob
 
-# 3) Rankings, Friedman, CD y tasa de éxito por dimensión -> resultados_bbob/analisis_bbob/
-python analisis/bbob.py --resultados resultados_bbob
+# 3) Post-procesamiento estándar de COCO (ECDF, ERT, tablas) -> resultados_bbob/ppdata/
+#    Desde coco/ para que las leyendas sean los ids; la primera vez descarga
+#    la referencia "best 2009" del archivo de COCO (necesita internet).
+cd resultados_bbob/coco
+python -m cocopp -o ../ppdata middleware pso de cmaes madde nlshadersp jade ga clpso abc clonalg optainet
+cd ../..
 
-# 4) Post-procesamiento estándar de COCO (ECDF, ERT, tablas) -> resultados_bbob/ppdata/
-cd resultados_bbob
-python -m cocopp -o ppdata coco/middleware coco/pso coco/de coco/cmaes coco/madde coco/nlshadersp \
-    coco/jade coco/ga coco/clpso coco/abc coco/clonalg coco/optainet
-cd ..
+# 4) Tablas, figuras y LEEME -> resultados_bbob/analisis/ (+ ECDF de cocopp en figuras/cocopp/)
+python analisis/bbob.py --resultados resultados_bbob --ppdata resultados_bbob/ppdata
 ```
 
 Abrir `resultados_bbob/ppdata/index.html` en el navegador. La leyenda de
-cada algoritmo es el nombre de su carpeta (`coco/pso`, …). `cocopp` tarda
+cada algoritmo es el nombre de su carpeta (`pso`, …). `cocopp` tarda
 algunos minutos con 12 algoritmos.
 
 Para comparar contra un algoritmo publicado en el archivo de datos de

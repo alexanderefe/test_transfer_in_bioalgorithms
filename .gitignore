@@ -81,6 +81,8 @@ resultados_MAC.zip
 # parrilla completa del Mac.
 resultados_piloto_referencia/
 resultados_ref_MAC/
+resultados_bbob.zip
+archive.zip
 resultados_ref_MAC.tar.gz
 piloto_referencia*.log
 piloto_ref_MAC.log
@@ -89,11 +91,19 @@ grid_ref_*.log
 # BBOB (README_BBOB.md): COCO escribe relativo a ./exdata/ (queda vacía); de
 # los resultados solo se versionan los consolidados, como en resultados/.
 exdata/
-resultados_bbob*/corridas/
-resultados_bbob*/corridas_propuesto/
-resultados_bbob*/logs_middleware/
-resultados_bbob*/fallos/
-resultados_bbob*/coco/
-resultados_bbob*/ppdata/
+# Parrilla BBOB del Mac: se versionan solo los consolidados (insumo de
+# analisis/bbob.py y de notebooks/analisis_bbob.ipynb), la guía de lectura y
+# las ECDF de cocopp (necesitan los ~130 000 archivos crudos de coco/, que no
+# se versionan). Tablas y demás figuras se regeneran con analisis/bbob.py.
+resultados_bbob/*
+!resultados_bbob/corridas.parquet
+!resultados_bbob/corridas_propuesto.parquet
+!resultados_bbob/analisis/
+resultados_bbob/analisis/*
+!resultados_bbob/analisis/LEEME.md
+!resultados_bbob/analisis/figuras/
+resultados_bbob/analisis/figuras/*
+!resultados_bbob/analisis/figuras/cocopp/
+resultados_bbob_*/
 resultados_bbob*.tar.gz
 grid_bbob*.log
