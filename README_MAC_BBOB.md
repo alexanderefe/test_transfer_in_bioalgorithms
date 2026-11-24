@@ -71,6 +71,23 @@ source ~/Fase_pruebas/.venv/bin/activate
 pip install --no-deps "coco-experiment==2.8.4" "cocopp==2.9.4" "platformdirs==4.14.5"
 ```
 
+> **"No such file or directory" al activar:** el clon `~/Fase_pruebas_bbob`
+> **no trae `.venv`**, porque está en `.gitignore`. Entonces
+> `source .venv/bin/activate` dentro del clon falla. Hay que activar el
+> entorno de `~/Fase_pruebas` con la ruta completa, como arriba. Si eso
+> también falla, el entorno está en otro lugar. Para ver qué Python usa
+> la parrilla en curso:
+>
+> ```bash
+> ps -o command= -p "$(pgrep -f experimentos/grid.py | head -1)"
+> # p. ej. /Users/<usuario>/Fase_pruebas/.venv/bin/python experimentos/grid.py ...
+> ls -d ~/Fase_pruebas/.venv ~/Fase_pruebas/venv 2>/dev/null
+> ```
+>
+> Activar `<carpeta de ese python>/activate`, es decir, la ruta que
+> muestra `ps` con `python` reemplazado por `activate`. Si no queda
+> ningún entorno, crear uno propio en el clon (§3b).
+
 - `coco-experiment` trae la wheel nativa `cp314-macosx_11_0_arm64`, sin
   compilar.
 - `cocopp` necesita `matplotlib` (ya instalado, 3.11.1), `numpy` y
@@ -87,6 +104,51 @@ print(platform.machine(), numpy.__version__, numba.__version__, scipy.__version_
 pandas.__version__, cocoex.__version__, cocopp.__version__)"
 # Esperado: arm64 2.5.2 0.67.0 1.18.1 3.0.5 2.8.4 2.9.4
 ```
+
+### 3b. Alternativa: entorno propio en el clon
+
+Independiente del de `~/Fase_pruebas`, con las mismas versiones
+(README_MAC paso 3 + README_MAC_REFERENCIA paso 3 + COCO):
+
+```bash
+cd ~/Fase_pruebas_bbob
+python3.14 -m venv .venv
+source .venv/bin/activate
+
+cat > /tmp/requirements-bbob-mac.txt <<'EOF'
+setuptools==81.0.0
+numpy==2.5.2
+scipy==1.18.1
+opfunu==1.0.1
+torch==2.13.0
+xgboost==3.4.1
+scikit-learn==1.9.0
+tqdm==4.70.0
+pandas==3.0.5
+pyarrow==25.0.1
+numba==0.67.0
+llvmlite==0.49.0
+cma==4.5.0
+niapy==2.7.1
+pymoo==0.6.2
+aisp==0.5.5
+mealpy @ git+https://github.com/thieu1995/mealpy.git@46b9850bdd6949a992372d03ed280b6302807d8d
+autograd==1.9.1
+moocore==0.3.2
+matplotlib==3.11.1
+alive-progress==3.3.0
+Deprecated==3.0.1
+coco-experiment==2.8.4
+cocopp==2.9.4
+platformdirs==4.14.5
+EOF
+pip install -r /tmp/requirements-bbob-mac.txt
+```
+
+Si `pip` cambió numpy, numba, scipy o pandas, reinstalar la versión de la
+lista. Comprobar con el mismo comando de versiones del paso 3. Con esta
+alternativa, en los pasos 6 y 8 activar `source .venv/bin/activate` desde
+`~/Fase_pruebas_bbob`, en vez de `~/Fase_pruebas/.venv`.
 
 ## 4. Verificación antes de lanzar
 
