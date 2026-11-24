@@ -423,6 +423,14 @@ Avance 2, detalle en `docs/competidores.md` §8:
   piloto): **44 064 corridas, ~1 607 h (~67 días) con 24 workers**, ~90 %
   en el tier `5×10⁷`; GCO solo aporta ~442 h.
 
+**Benchmark BBOB con los 12 algoritmos (2026-11-22, rama `bbob`)** —
+segundo benchmark (suite `bbob` de COCO), con el protocolo nativo de COCO:
+24 funciones × D ∈ {2, 3, 5, 10, 20, 40} × 15 instancias, presupuesto
+10⁴·D, 25 920 corridas, ~56 h-núcleo según el piloto. Opciones evaluadas,
+implementación, lanzamiento y análisis (`grid_bbob.py`, `analisis/bbob.py`,
+`cocopp`) en [README_BBOB.md](README_BBOB.md). Reabre el alcance "solo
+CEC 2022": falta registrarlo como D-13.
+
 ### Pendiente ⏳ — en orden recomendado
 
 **Algoritmos de referencia por familia — decisiones abiertas:**
