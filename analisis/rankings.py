@@ -20,8 +20,8 @@ sys.path.insert(0, str(RAIZ))
 import pandas as pd
 
 from analisis.datos import (
-    ALGORITMOS, N_FUNCIONES, cargar_corridas, configuraciones, id_config,
-    tabla_error_medio,
+    ALGORITMOS, ALGORITMOS_PRINCIPALES, N_FUNCIONES, cargar_corridas, configuraciones,
+    id_config, tabla_error_medio,
 )
 
 TOLERANCIA_EMPATE = 1e-8
@@ -246,7 +246,19 @@ def generar_leeme(dir_salida: str | Path = "resultados/analisis") -> Path:
     dir_salida = Path(dir_salida)
     dir_salida.mkdir(parents=True, exist_ok=True)
     ruta = dir_salida / "LEEME.md"
-    ruta.write_text(LEEME_METODOLOGIA, encoding="utf-8")
+    texto = LEEME_METODOLOGIA
+    if tuple(ALGORITMOS) != ALGORITMOS_PRINCIPALES:
+        k = len(ALGORITMOS)
+        texto = (
+            f"> **Análisis con k = {k} algoritmos:** {', '.join(ALGORITMOS)}. "
+            f"Donde abajo dice 6 algoritmos, rangos de 1 a 6, 15 comparaciones de "
+            f"Shaffer o CD ≈ 2.18, léase k = {k}, rangos de 1 a {k}, "
+            f"{k * (k - 1) // 2} comparaciones y la CD del título de cada diagrama. "
+            f"Wilcoxon compara al propuesto con los otros {k - 1} algoritmos "
+            f"(+ pso vs de). Las figuras `boxplot_*` muestran la distribución de "
+            f"las 51 semillas (error final) y de los 12 rangos por función.\n\n"
+        ) + texto
+    ruta.write_text(texto, encoding="utf-8")
     return ruta
 
 

@@ -63,20 +63,21 @@ def dibujar_cd(rangos_promedio: dict[str, float], cd: float, titulo: str, ruta_s
     valores = [rangos_promedio[a] for a in algoritmos]
     k = len(algoritmos)
 
-    fig, ax = plt.subplots(figsize=(8, 2.6))
+    # Con más algoritmos el diagrama se ensancha y las etiquetas rotan entre
+    # tres alturas (con 12, dos alturas superponían nombres vecinos).
+    fig, ax = plt.subplots(figsize=(8, 2.6) if k <= 6 else (1.05 * k + 1.5, 3.2))
     ax.set_xlim(0.5, k + 0.5)
-    ax.set_ylim(0, 1)
+    ax.set_ylim(-0.2 if k > 6 else 0, 1)
     ax.axhline(0.5, color="black", linewidth=1)
     for x in range(1, k + 1):
         ax.plot([x, x], [0.47, 0.53], color="black", linewidth=1)
         ax.text(x, 0.6, str(x), ha="center", fontsize=9)
 
+    alturas = (0.2, 0.0) if k <= 6 else (0.25, 0.05, -0.15)
     for n, (a, v) in enumerate(zip(algoritmos, valores)):
         ax.plot(v, 0.5, "o", color="tab:blue", markersize=6)
-        # Alturas alternadas: con 6 algoritmos dos rangos cercanos
-        # superponían sus etiquetas.
         ax.annotate(f"{NOMBRE_ALGORITMO.get(a, a)}\n({v:.2f})", xy=(v, 0.5),
-                    xytext=(v, 0.2 if n % 2 == 0 else 0.0), ha="center", fontsize=8,
+                    xytext=(v, alturas[n % len(alturas)]), ha="center", fontsize=8,
                     arrowprops=dict(arrowstyle="-", color="gray"))
 
     # Barras de grupo: algoritmos consecutivos (por rango) cuya diferencia

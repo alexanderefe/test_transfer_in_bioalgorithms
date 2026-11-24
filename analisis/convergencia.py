@@ -43,8 +43,8 @@ import numpy as np
 import pandas as pd
 
 from analisis.datos import (
-    ALGORITMOS, N_FUNCIONES, NOMBRE_ALGORITMO, cargar_corridas, configuraciones,
-    id_config,
+    ALGORITMOS, ALGORITMOS_REFERENCIA, N_FUNCIONES, NOMBRE_ALGORITMO, cargar_corridas,
+    configuraciones, id_config,
 )
 from problems.cec2022_wrapper import FRACCIONES_CHECKPOINT, UMBRAL_ERROR_CERO
 
@@ -59,15 +59,17 @@ COLOR_ALGORITMO = {
     "cmaes": "#9467bd",
     "madde": "#ff7f0e",
     "nlshadersp": "#8c564b",
-    # Referencia por familia (aún fuera de ALGORITMOS; ver analisis/datos.py)
+    # Referencia por familia (con --algoritmos principal+referencia): tonos
+    # oscuros y línea punteada, para que se lean sobre fondo blanco junto a
+    # los 6 principales. jde, gwo y gco no se corrieron (pasteles).
     "ga": "#e377c2",
-    "jde": "#7f7f7f",
-    "jade": "#bcbd22",
+    "jade": "#a3a31a",
     "clpso": "#17becf",
-    "gwo": "#aec7e8",
-    "abc": "#ffbb78",
-    "clonalg": "#98df8a",
-    "optainet": "#c5b0d5",
+    "abc": "#7f7f7f",
+    "clonalg": "#393b79",
+    "optainet": "#8c6d31",
+    "jde": "#aec7e8",
+    "gwo": "#ffbb78",
     "gco": "#c49c94",
 }
 
@@ -137,19 +139,26 @@ def _dibujar_agregado(ax, trz: dict[str, np.ndarray], x: np.ndarray) -> None:
         ax.fill_between(x, q1, q3, color=color, alpha=0.15, linewidth=0,
                         zorder=3 if propuesto else 2)
         ax.plot(x, mediana, color=color, label=NOMBRE_ALGORITMO[algoritmo],
+                linestyle=_estilo_linea(algoritmo),
                 linewidth=2.0 if propuesto else 1.2, zorder=4 if propuesto else 3)
+
+
+def _estilo_linea(algoritmo: str) -> str:
+    """Los algoritmos de referencia por familia van punteados: con 12
+    curvas el color solo no alcanza para distinguirlos."""
+    return "--" if algoritmo in ALGORITMOS_REFERENCIA else "-"
 
 
 def _leyenda_figura(fig, ax) -> None:
     fig.legend(*ax.get_legend_handles_labels(), loc="lower center",
-               ncol=len(ALGORITMOS), fontsize=9, frameon=False)
+               ncol=min(len(ALGORITMOS), 6), fontsize=9, frameon=False)
 
 
 def panel_configuracion(df: pd.DataFrame, dim: int, max_fes: int, ruta: Path,
                         magnitud: str = "error") -> None:
     """Las 12 funciones de una configuración en una grilla de 3 × 4."""
     x = fes_checkpoints(max_fes)
-    fig, ejes = plt.subplots(3, 4, figsize=(16, 10.5))
+    fig, ejes = plt.subplots(3, 4, figsize=(16, 10.5 if len(ALGORITMOS) <= 6 else 11.2))
     for funcion, ax in zip(range(1, N_FUNCIONES + 1), ejes.flat):
         trz = trazas(df, dim, max_fes, funcion, magnitud)
         _dibujar_agregado(ax, trz, x)
@@ -161,7 +170,7 @@ def panel_configuracion(df: pd.DataFrame, dim: int, max_fes: int, ruta: Path,
         ax.set_ylabel("Error" if magnitud == "error" else "Fitness")
     fig.suptitle(f"Convergencia — {_titulo(dim, max_fes)} ({_rotulo_agregado(trz)})")
     _leyenda_figura(fig, ejes.flat[0])
-    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    fig.tight_layout(rect=(0, 0.04 if len(ALGORITMOS) <= 6 else 0.07, 1, 0.97))
     fig.savefig(ruta, dpi=150)
     plt.close(fig)
 
@@ -194,7 +203,7 @@ def figura_semilla(df: pd.DataFrame, dim: int, max_fes: int, funcion: int,
             continue
         propuesto = algoritmo == "middleware"
         ax.plot(x, trz[algoritmo][0], color=COLOR_ALGORITMO[algoritmo],
-                label=NOMBRE_ALGORITMO[algoritmo],
+                label=NOMBRE_ALGORITMO[algoritmo], linestyle=_estilo_linea(algoritmo),
                 linewidth=2.0 if propuesto else 1.2, zorder=4 if propuesto else 3)
     _formatear_eje(ax, max_fes, magnitud)
     ax.set_title(f"F{funcion} — {_titulo(dim, max_fes)}, semilla {idx_semilla}",

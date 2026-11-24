@@ -65,6 +65,15 @@ Resultados_Union/*
 !Resultados_Union/analisis/
 Resultados_Union/analisis/*
 !Resultados_Union/analisis/LEEME.md
+# Ídem para la unión con los algoritmos de referencia (12 algoritmos): los
+# consolidados los usa notebooks/analisis_resultados.ipynb en Colab.
+Resultados_Union_Referencia/*
+!Resultados_Union_Referencia/corridas.parquet
+!Resultados_Union_Referencia/corridas_propuesto.parquet
+!Resultados_Union_Referencia/analisis/
+Resultados_Union_Referencia/analisis/*
+!Resultados_Union_Referencia/analisis/LEEME.md
+analisis_principal*.zip
 resultados_ubuntu.zip
 resultados_MAC.zip
 

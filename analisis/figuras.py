@@ -17,8 +17,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from analisis.convergencia import COLOR_ALGORITMO
 from analisis.datos import (
-    ALGORITMOS, DIMS, MAXFES, NOMBRE_ALGORITMO, cargar_corridas, cargar_propuesto,
+    ALGORITMOS, ALGORITMOS_REFERENCIA, DIMS, MAXFES, NOMBRE_ALGORITMO, cargar_corridas,
+    cargar_propuesto,
 )
 from analisis.rankings import ranking_configuracion
 
@@ -64,16 +66,18 @@ def barras_rangos_por_maxfes(df: pd.DataFrame, dim: int, ruta_salida: Path) -> N
     x = range(len(MAXFES))
     k = len(ALGORITMOS)
     ancho = 0.8 / k
-    fig, ax = plt.subplots(figsize=(9, 4))
+    fig, ax = plt.subplots(figsize=(9 if k <= 6 else 12, 4 if k <= 6 else 5))
     for i, a in enumerate(ALGORITMOS):
         pos = [xi + (i - (k - 1) / 2) * ancho for xi in x]
-        ax.bar(pos, datos[a], width=ancho, label=NOMBRE_ALGORITMO.get(a, a))
+        ax.bar(pos, datos[a], width=ancho, label=NOMBRE_ALGORITMO.get(a, a),
+               color=COLOR_ALGORITMO.get(a), hatch="//" if a in ALGORITMOS_REFERENCIA else None,
+               edgecolor="white", linewidth=0.5)
     ax.set_xticks(list(x))
     ax.set_xticklabels([f"{m:,}".replace(",", ".") for m in MAXFES])
     ax.set_xlabel("MaxFES")
     ax.set_ylabel("Rango promedio (1=mejor)")
     ax.set_title(f"Rango promedio por MaxFES — CEC2022_{dim}")
-    ax.legend(fontsize=8, ncol=len(ALGORITMOS), loc="upper center",
+    ax.legend(fontsize=8, ncol=min(k, 6), loc="upper center",
               bbox_to_anchor=(0.5, -0.15), frameon=False)
     ax.invert_yaxis()
     fig.tight_layout()

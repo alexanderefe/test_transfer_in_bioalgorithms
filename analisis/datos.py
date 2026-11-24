@@ -10,6 +10,7 @@ a partir de estos dos archivos.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -20,7 +21,17 @@ from problems.cec2022_wrapper import FRACCIONES_CHECKPOINT
 # Identidad del experimento (setup §1-§5) — constantes compartidas por todo
 # `analisis/`, para no repetirlas en cada módulo.
 # Propuesto + algoritmos base solos (D-4) + competidores externos (D-8).
-ALGORITMOS = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp")
+ALGORITMOS_PRINCIPALES = ("middleware", "pso", "de", "cmaes", "madde", "nlshadersp")
+# Los 6 de referencia por familia corridos en el Mac (README_MAC_REFERENCIA.md).
+REFERENCIA_SELECCIONADOS = ("ga", "jade", "clpso", "abc", "clonalg", "optainet")
+# Conjunto de algoritmos del análisis. Por defecto la parrilla principal; con
+# la variable de entorno ANALISIS_ALGORITMOS (lista separada por comas, la fija
+# `analisis/main.py --algoritmos` ANTES de importar el resto de `analisis/`)
+# se analiza otro conjunto, p. ej. la parrilla principal + los de referencia.
+# Se lee al importar: todos los módulos de `analisis/` ven el mismo conjunto.
+_ALGORITMOS_ENV = os.environ.get("ANALISIS_ALGORITMOS", "").strip()
+ALGORITMOS = (tuple(a.strip() for a in _ALGORITMOS_ENV.split(",") if a.strip())
+              if _ALGORITMOS_ENV else ALGORITMOS_PRINCIPALES)
 NOMBRE_ALGORITMO = {
     "middleware": "Propuesto",
     "pso": "PSO",
@@ -44,6 +55,16 @@ NOMBRE_ALGORITMO = {
 # Shaffer / Wilcoxon) hasta decidir si van al mismo ranking que los
 # competidores o a un análisis aparte, y hasta que la parrilla los incluya.
 ALGORITMOS_REFERENCIA = ("ga", "jde", "jade", "clpso", "gwo", "abc", "clonalg", "optainet", "gco")
+# Grupo de cada algoritmo, para colorear figuras con muchos algoritmos
+# (boxplots): el propuesto, los de la parrilla principal y cada familia.
+GRUPO_ALGORITMO = {
+    "middleware": "propuesto",
+    "pso": "principal", "de": "principal", "cmaes": "principal",
+    "madde": "principal", "nlshadersp": "principal",
+    "ga": "evolutivo", "jde": "evolutivo", "jade": "evolutivo",
+    "clpso": "enjambre", "gwo": "enjambre", "abc": "enjambre",
+    "clonalg": "inmune", "optainet": "inmune", "gco": "inmune",
+}
 DIMS = (10, 20)
 MAXFES = (50_000, 500_000, 5_000_000, 50_000_000)
 N_FUNCIONES = 12
@@ -54,9 +75,9 @@ def cargar_corridas(ruta: str | Path = "resultados/corridas.parquet") -> pd.Data
     """
     Carga `corridas.parquet` y valida su forma antes de analizar nada:
     todas las corridas deben estar en `estado="ok"` y el total de filas
-    debe coincidir exactamente con 6 algoritmos × 2 dims × 4 MaxFES ×
-    12 funciones × 51 semillas = 29 376, con exactamente los algoritmos
-    de `ALGORITMOS`.
+    debe coincidir exactamente con k algoritmos × 2 dims × 4 MaxFES ×
+    12 funciones × 51 semillas (29 376 con los 6 de la parrilla principal),
+    con exactamente los algoritmos de `ALGORITMOS`.
     """
     df = pd.read_parquet(ruta)
     n_fallo = int((df["estado"] != "ok").sum())
